@@ -26,19 +26,6 @@ That's it. It updates itself from this repo, so you only install once.
 
 ---
 
-## The panel
-
-Drawn to match JanitorAI's own buttons — `#704F73` filled with a `#AC6CAE` outline and
-white text — on the site's grey surfaces, read off its live stylesheet rather than
-eyeballed.
-
-It only shows controls the selected rule actually uses. Under the default card-depth rule
-the learned-baseline machinery — the trust floor, the chat-inflation cutoff, the
-learned-ratios table and *Forget what it learned* — is hidden, because none of it is
-running. Under the slider it reports what the current setting is doing right now: *hiding
-3 of the 31 cards it can judge here*.
-
----
 
 ## About the session token — read this
 
