@@ -115,6 +115,18 @@ var JBF_PANEL = (function () {
     td:first-child{text-align:left;color:rgba(255,255,255,.5)}
 
     .note{font-size:11.2px;color:rgba(255,255,255,.5);line-height:1.45}
+    .vd{display:block;width:100%;text-align:left;background:#1c1c1e;
+      border:1px solid rgba(255,255,255,.1);border-radius:5px;padding:6px 8px;
+      margin-bottom:5px;cursor:pointer;color:rgba(255,255,255,.85);font-size:11.5px}
+    .vd:hover{background:#313338;border-color:var(--jbf-accent-hi)}
+    .vd b{display:block;font-weight:600;font-size:11.8px;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .vd span{display:block;color:rgba(255,255,255,.5);font-size:10.6px;
+      line-height:1.35;margin-top:2px}
+    .vd .tag{display:inline-block;font-size:9.5px;letter-spacing:.4px;
+      text-transform:uppercase;font-weight:700;margin-bottom:2px}
+    .vd.hid .tag{color:var(--jbf-accent-hi)}
+    .vd.maybe .tag{color:#e8c98a}
     .foot{font-size:10.5px;line-height:1.5;color:rgba(255,255,255,.35);margin:13px 0 0}
     .hidden{display:none}
     .dim{opacity:.4}
@@ -150,6 +162,12 @@ var JBF_PANEL = (function () {
             <button data-preset="balanced">Balanced</button>
             <button data-preset="strict">Strict</button>
           </div>
+        </div>
+
+        <div class="group" id="verdictBox">
+          <p class="sect">What it did on this page</p>
+          <div id="verdicts"></div>
+          <p class="foot" style="margin-top:6px">Click any of these to overrule it.</p>
         </div>
 
         <div class="group">
@@ -225,6 +243,24 @@ var JBF_PANEL = (function () {
                 </label>
               </div>
               <div class="row">
+                <input type="checkbox" id="useLikes">
+                <label for="useLikes">Read the comment count
+                  <span class="why">Asks janitorai how many comments a card has, for ones
+                  already in question — a few requests per page, no login needed. Where
+                  the depth score is too close to call, this decides it. A busy comment
+                  section never rescues a card on its own.</span>
+                </label>
+              </div>
+              <div class="row">
+                <input type="checkbox" id="flagSilence">
+                <label for="flagSilence">Flag chats nobody comments on
+                  <span class="why">Thousands of chats leaving almost no comments behind.
+                  Catches botted cards that look completely ordinary otherwise. Only
+                  applies between 1,000 and 7,000 chats, where the rate was measured
+                  — past that, ordinary cards go quiet too.</span>
+                </label>
+              </div>
+              <div class="row">
                 <input type="checkbox" id="flagFlatGrowth">
                 <label for="flagFlatGrowth">Flag traffic that never sleeps
                   <span class="why">Real cards get busy in the evening and quiet
@@ -256,8 +292,9 @@ var JBF_PANEL = (function () {
               <div class="row indent mid" id="trustRow">
                 <label for="trustAbove">Trust cards over
                   <span class="why">Messages are cheap to fake; chats are not — each one
-                  is another account. Past this many, a high ratio is taken as real
-                  engagement. 0 judges every card on ratio.</span>
+                  is another account. Past this many a card is marked rather than
+                  hidden, whatever its ratio: the cards that fooled this rule were all
+                  tiny, famous ones with tens of thousands of chats. 0 turns it off.</span>
                 </label>
                 <input type="number" id="trustAbove" min="0" max="1000000" step="100">
                 <span class="unit">chats</span>
@@ -279,6 +316,7 @@ var JBF_PANEL = (function () {
               <table id="btable"></table>
               <div class="note" id="wlinfo" style="margin-bottom:2px"></div>
               <button class="wide" id="clearwl">Unmark the cards you marked as fine</button>
+              <button class="wide" id="clearsus">Unmark the cards you marked as botted</button>
               <button class="wide" id="copy">Copy this page's numbers</button>
               <button class="wide danger" id="reset">Forget what it learned</button>
             </div>
@@ -330,7 +368,7 @@ var JBF_PANEL = (function () {
       });
 
     ['enabled', 'replace', 'peerLowSide', 'flagHigh', 'flagLow', 'flagVelocity', 'flagTrend',
-     'flagFlatGrowth', 'flagStaleRatio']
+     'flagFlatGrowth', 'flagStaleRatio', 'useLikes', 'flagSilence']
       .forEach(k => bindCheck(k, k));
 
     const LISTS = ['trending24', 'trending', 'popular', 'latest', 'other'];
@@ -342,16 +380,17 @@ var JBF_PANEL = (function () {
     ['highRatio', 'lowRatio', 'maxChatsPerDay', 'minChats', 'trustAbove', 'lowMultiple']
       .forEach(k => bindNum(k, k));
 
-    // Label tracks the drag; the page only re-filters on release.
-    // Slider position -> sensitivity. Right is more sensitive (smaller
-    // threshold), so the value is inverted across its own range.
-    // Slider position -> multiple of normal. Right is more aggressive, which
-    // means a SMALLER multiple, so the value is inverted across its range.
+    // Label tracks the drag; the page only re-filters on release. Right is
+    // always more aggressive, which means a SMALLER number, so both
+    // mappings are inverted across their range.
     const posToMult = v => (75 - v) / 10;    // 15..60  ->  6.0x..1.5x
     const multToPos = m => 75 - m * 10;
-    // Card-depth slider: msg/chat per 1,000 tokens of character.
     const posToThin = v => (26 - v / 5);     // 20..100 ->  22 .. 6
     const thinToPos = t => (26 - t) * 5;
+    // The depth rule has two tiers and the slider carries both, or dragging
+    // far enough puts the mark line above the hide line and the middle tier
+    // vanishes. 1.36 is the spacing the labelled set measured.
+    const TIER_GAP = 1.36;
 
     $('peerRange').addEventListener('input', e => {
       const v = parseFloat(e.target.value);
@@ -361,8 +400,10 @@ var JBF_PANEL = (function () {
     $('peerRange').addEventListener('change', e => {
       const v = parseFloat(e.target.value);
       if (!isFinite(v)) return;
+      const t = posToThin(v);
       api.save(api.getCfg().rule === 'thin'
-        ? { thinScore: posToThin(v) } : { maxMultiple: posToMult(v) });
+        ? { thinScore: t, depthSure: Math.round(t * TIER_GAP * 10) / 10 }
+        : { maxMultiple: posToMult(v) });
     });
 
     root.querySelectorAll('#mode button').forEach(b =>
@@ -379,6 +420,7 @@ var JBF_PANEL = (function () {
       setTimeout(() => { $('copy').textContent = "Copy this page's numbers"; }, 1600);
     });
 
+    $('clearsus').addEventListener('click', () => api.save({ suspected: [] }));
     $('clearwl').addEventListener('click', () => {
       if (api.clearWhitelist) api.clearWhitelist();
       refresh();
@@ -398,12 +440,14 @@ var JBF_PANEL = (function () {
       $('flagLow').checked = c.flagLow;
       $('flagVelocity').checked = c.flagVelocity;
       $('flagTrend').checked = c.flagTrend;
+      $('useLikes').checked = c.useLikes;
+      $('flagSilence').checked = c.flagSilence;
       $('flagFlatGrowth').checked = c.flagFlatGrowth;
       $('flagStaleRatio').checked = c.flagStaleRatio;
       LISTS.forEach(k => { $('l-' + k).checked = !!(c.lists && c.lists[k]); });
-      // NOT the slider — refresh() owns it, because which number it carries
+      // NOT the slider — refresh() owns it, since which number it carries
       // depends on the rule. Setting it here pinned it to the peer position
-      // (2.25x lands on 52.5) no matter where it had just been dragged.
+      // wherever it had just been dragged.
       $('highRatio').value = c.highRatio;
       $('lowRatio').value = c.lowRatio;
       $('maxChatsPerDay').value = c.maxChatsPerDay;
@@ -422,10 +466,9 @@ var JBF_PANEL = (function () {
       root.querySelectorAll('#rule button').forEach(b =>
         b.classList.toggle('sel', b.dataset.rule === c.rule));
 
-      // The slider drives whichever rule is selected — the card-depth score
-      // or the multiple-of-normal. Only "a fixed number" ignores it, and it
-      // used to be disabled for everything that wasn't the peer rule, which
-      // is why it went dead the moment the depth rule became the default.
+      // Drives whichever rule is selected; only "a fixed number" ignores it.
+      // Disabling it for everything but the peer rule is what made it go
+      // dead when the depth rule became the default.
       const peer = c.rule === 'peer';
       const slid = peer || c.rule === 'thin';
       $('fixedBox').classList.toggle('hidden', c.rule !== 'fixed');
@@ -436,6 +479,9 @@ var JBF_PANEL = (function () {
       fab.classList.toggle('on', !!c.enabled);
     }
 
+    const esc = t => String(t == null ? '' : t)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
     const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
 
     function refresh() {
@@ -520,13 +566,31 @@ var JBF_PANEL = (function () {
         const el = $(id); if (el) el.classList.toggle('hidden', !learned);
       }
 
+      // Show the working: what it acted on here, and why.
+      const vs = s.verdicts || [];
+      $('verdictBox').classList.toggle('hidden', !c.enabled || !vs.length);
+      if (vs.length) {
+        $('verdicts').innerHTML = vs.map(v =>
+          `<button class="vd ${v.confident ? 'hid' : 'maybe'}" data-id="${v.id}">` +
+          `<span class="tag">${v.confident
+            ? (c.mode === 'hide' ? 'hidden' : 'marked') : 'marked \u2014 not sure'}</span>` +
+          `<b>${esc(v.name)}</b><span>${esc(v.reason)}</span></button>`).join('');
+        root.querySelectorAll('.vd').forEach(b => b.addEventListener('click', () => {
+          const id = b.dataset.id;
+          const fine = (api.getCfg().whitelist || []).slice();
+          if (fine.indexOf(id) === -1) fine.push(id);
+          const sus = (api.getCfg().suspected || []).filter(x => x !== id);
+          api.save({ whitelist: fine, suspected: sus });
+        }));
+      }
+
       $('wlinfo').textContent =
-        (s.whitelisted
-          ? `${s.whitelisted} marked fine`
-          : 'Click a badge to mark a card as fine') +
-        (sus ? `, ${sus} marked botted` : '; shift-click to mark one as botted') +
-        '. Both go into the exported numbers.';
+        (s.whitelisted ? `${s.whitelisted} marked fine` : 'Click a badge to mark a card fine') +
+        (sus ? `, ${sus} marked botted` : ', shift-click to mark it botted') +
+        '. A card you mark botted is hidden like any other; hover a card that ' +
+        'passed and its badge appears.';
       $('clearwl').style.display = s.whitelisted ? '' : 'none';
+      $('clearsus').style.display = sus ? '' : 'none';
 
       $('baseinfo').textContent = s.baselineSamples
         ? `Typical ratios learned from ${s.baselineSamples.toLocaleString('en-US')} cards.`

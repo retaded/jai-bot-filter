@@ -40,10 +40,10 @@ const LOWBALL = chr('Chats Without Talk', 9000, 18000, { days: 500 });    // 2.0
 // 18.8 msg/chat out of a 1,300-token card — thin, like the real botted ones
 // measured live (473-1,620 tokens). At the fixture default of 2,500 it would
 // legitimately have earned that ratio.
-// 18.8 msg/chat out of a 400-token card. The token count has to be thin
-// FOR ITS AGE: at 300 days old, 18.8 msg/chat is ordinary on its own (real
-// cards past a year run ~30), so only a very thin card makes it remarkable.
-const HANA   = chr('Trapped In Hell with Hana', 957, 18000, { days: 300, tokens: 400 });
+// 18.8 msg/chat out of a 150-token card. Thin FOR ITS AGE — at 300 days old
+// 18.8 msg/chat is ordinary on its own (real cards past a year run ~30) —
+// and thin by a wide enough margin to be hidden rather than merely marked.
+const HANA   = chr('Trapped In Hell with Hana', 957, 18000, { days: 300, tokens: 150 });
 const MAFIA  = chr('Mafia Boss', 859910, 38819373, { days: 1200 });        // 45.1
 const TINY   = chr('Tiny New Card', 12, 400, { days: 2 });
 // 2,571 chats/day sustained over 35 days. Has to be past the launch window
@@ -411,8 +411,10 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
         days: 1, publicChats: 0 };
       JBF._internals.evaluate(rec); return rec;
     };
-    // Off by default — once the curve holds its slope, a card's own size is
-    // already priced in and this is only there for people who want it.
+    // ON by default since v7. Seven live cards scored past the depth
+    // threshold on ratio alone; every one was a tiny, famous utility card
+    // with tens of thousands of chats. The guard sits in the 6x gap between
+    // those and the largest hand-labelled bot.
     const guardWas = JBF.cfg.trustAbove;
     JBF.cfg.trustAbove = 1500;
     // Same ratio, two very different audience sizes.
@@ -429,7 +431,7 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
       JBF.cfg.trustAbove = 1500;
       return again.flagged;
     })());
-    ok('and it is off by default', guardWas === 0, String(guardWas));
+    ok('and it guards by default now', guardWas >= 4000, String(guardWas));
     ok('chats arriving without conversation are still caught at any size', (() => {
       const r = judge(6515, 0.9);          // far BELOW normal: chat inflation
       return r.flagged && /without conversation/.test(r.reason);
@@ -655,7 +657,12 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
   ok('donor creator replaced', rep.querySelector('.pp-cc-creator-name').textContent !== '@old');
   ok('donor description replaced',
      rep.querySelector('.pp-cc-description').textContent !== 'Old description.');
-  ok('donor badge not cloned', !rep.querySelector('.jbf-badge'));
+  // Every judged card carries a badge now, so a replacement having one is
+  // correct — it must just not be carrying the DONOR's id.
+  ok("donor's badge not cloned onto the replacement", (() => {
+    const b = rep.querySelector('.jbf-badge');
+    return !b || b.getAttribute('data-jbf-id') !== hana.id;
+  })());
   ok('replacement not marked seen from donor', !rep.hasAttribute('data-jbf-seen') ||
      rep.getAttribute('data-jbf-seen') !== hana.id);
   ok('replacements are themselves clean',
@@ -755,7 +762,7 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
   const badge = target.root.querySelector('.jbf-badge');
   ok('its badge carries the card id', badge && badge.getAttribute('data-jbf-id') === target.id);
   ok('the badge says what a click does',
-     badge && /mark it fine/.test(badge.title) && /shift-click/.test(badge.title),
+     badge && /mark it fine/i.test(badge.title) && /shift-click/i.test(badge.title),
      badge ? badge.title.split('\n').pop() : 'no badge');
   badge.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await sleep(200);
@@ -1275,7 +1282,7 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
       JBF._internals.evaluate(rec); return rec;
     };
     const legit = judge(1026, 15061, 6598);   // heroines
-    const bot   = judge(1124, 16846, 1538);   // Lonely
+    const bot   = judge(1124, 21000, 1538);   // a thin card at 18.7 msg/chat
     ok('a card with the character to account for its ratio survives the peer rule',
        !legit.flagged, legit.reason);
     ok('and says so rather than going quiet',
@@ -1283,7 +1290,7 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
     ok('the thin one is still caught', bot.flagged, bot.reason);
     // Control: the guard must not be "never flag" — same ratio, thin card.
     ok('the guard is about the tokens, not the card',
-       judge(1026, 15061, 1538).flagged, 'same ratio on a 1,538-token card');
+       judge(1026, 21000, 1538).flagged, 'same ratio on a 1,538-token card');
     // And the low side must still work, since a chat count can itself be faked.
     ok('chat-inflation is still caught on a deep card',
        judge(6000, 5400, 6598).flagged, judge(6000, 5400, 6598).reason);
@@ -1296,14 +1303,27 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
     // Settings written before the depth rule existed pin rule:'peer'. Left
     // alone, the upgrade silently keeps judging on the learned baseline.
     let written = null;
-    const old = { rule: 'peer', maxMultiple: 2.0, mode: 'badge', whitelist: ['keep-me'] };
+    const old = { rule: 'peer', maxMultiple: 2.0, mode: 'badge', whitelist: ['keep-me'],
+      thinScore: 8.6, cfgVersion: 5 };
     JBF.setStorage({ get: async () => old, set: async c => { written = c; },
       getData: async () => null, setData: async () => {} });
     const c = await JBF.loadCfg();
     ok('an old install is moved onto the rule that needs no baseline', c.rule === 'thin', c.rule);
     ok('and its own settings are kept', c.mode === 'badge' && c.maxMultiple === 2.0 &&
        c.whitelist.length === 1, JSON.stringify({mode:c.mode, max:c.maxMultiple, wl:c.whitelist}));
-    ok('the migration is written back, so it happens once', written && written.cfgVersion === 5,
+    // But NOT a stale threshold. An install carrying 8.6 from an earlier
+    // release kept hiding a card the re-measured labels clear, and shipping
+    // a new default could not dislodge it.
+    ok('a saved threshold does not survive a recalibration',
+       c.thinScore === JBF.DEFAULTS.thinScore, String(c.thinScore));
+    // v7 added a second tier and a comment test. An install that predates
+    // them has no saved opinion about them worth keeping — and trustAbove
+    // shipped as 0, the setting that let big minimal cards be hidden.
+    ok('and the second tier arrives with it', c.depthSure > c.thinScore,
+       `${c.thinScore} / ${c.depthSure}`);
+    ok('and the broad-audience guard is turned on', c.trustAbove > 0, String(c.trustAbove));
+    ok('the migration is written back, so it happens once',
+       written && written.cfgVersion === JBF.cfg.cfgVersion,
        written ? String(written.cfgVersion) : 'not written');
     // Hand the harness's own storage back, or every later test runs against
     // this block's stub.
@@ -1352,6 +1372,379 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
 
     for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
     Object.assign(JBF.cfg, before);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\na card with no history has no usual rate');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true,
+      suspected: [], whitelist: [] });
+    await sleep(60);
+    // Both of these were hidden on a live listing. Both are a day old, both
+    // plainly genuine, both simply climbing: everything on 24-hour trending
+    // is accelerating, and against a lifetime average taken over one day
+    // that reads as a spike.
+    const climbing = (chats, days, dc, dm) => {
+      const rec = { id: 'v' + chats + days, name: 'x', chats, messages: chats * 17,
+        ratio: 17, days, tokens: 4919, publicChats: 0, chatsPerDay: chats / days,
+        trend: { dc, dm, hours: 2, ts: Date.now() } };
+      JBF._internals.evaluate(rec); return rec;
+    };
+    const dayOld = climbing(684, 1, 402, 6800);       // "7x its usual"
+    ok('a day-old card taking off is not called a burst',
+       !/\/day/.test(dayOld.reason || ''), dayOld.reason || '(nothing)');
+    const settled = climbing(6000, 40, 402, 6800);    // same delta, real history
+    ok('the same delta on a card with history still is',
+       /\/day/.test(settled.reason || ''), settled.reason);
+    ok('and the floor is stated in days, not guessed',
+       JBF.cfg.minTrendDays >= 7, String(JBF.cfg.minTrendDays));
+
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\nthe whole labelled set, re-measured together');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true, useLikes: true,
+      suspected: [], whitelist: [] });
+    await sleep(60);
+    const L = JBF._internals.comments;
+
+    // Every card labelled by hand over the life of this project, each one
+    // re-read from the API in a single pass so nothing here is stale. That
+    // matters: one card's definition grew from 1,538 to 4,169 tokens between
+    // being labelled and being used as calibration, and another drifted from
+    // 10.31 to 10.43 across the threshold that was hiding it.
+    //
+    // chats, msg/chat, tokens, days old, comments, comment mode, botted.
+    const SET = [
+      ['Undertale', 118, 43.47, 1815, 1.0, 0, 'disabled', 1],
+      ['Ellen Joe', 136, 30.38, 724, 1.0, 2, 'open', 1],
+      ['I married a lesbian', 416, 24.80, 639, 1.0, 15, 'open', 1],
+      ['Apocalyptic Sanctuary', 503, 16.13, 1452, 1.0, 2, 'open', 1],
+      ['Sofia', 742, 10.70, 473, 1.0, 14, 'open', 1],
+      ['Friends w Apt Benefits', 4221, 16.65, 2750, 7.0, 9, 'open', 1],
+      ['Emily Sweaty Submission', 1731, 14.00, 2700, 5.0, 3, 'open', 1],
+      ['Your Sweet Step Mom', 2281, 12.50, 4800, 5.0, 3, 'open', 1],
+      ['Aliens abducted', 690, 12.45, 1106, 1.0, 6, 'open', 1],
+      ['Succubus Crush', 1975, 14.86, 1351, 1.0, 22, 'open', 0],
+      ['Stuck in One Room', 2336, 21.19, 2286, 1.3, 18, 'open', 0],
+      ['Kidnapped For Content', 703, 17.25, 4919, 1.0, 27, 'followed_only', 0],
+      ['Pregnant Cult Member', 687, 15.67, 4359, 1.3, 4, 'open', 0],
+      ['Wife futa coworker', 2152, 12.09, 3544, 1.0, 12, 'open', 0],
+      ['No One Thinks', 6245, 19.68, 3521, 1.0, 86, 'open', 0],
+      ['Yandere Best Friend', 1612, 7.50, 3225, 1.0, 56, 'open', 0],
+      ['DeepSeek-chan', 272, 15.26, 3614, 1.4, 9, 'open', 0],
+      ['A Smile and a Smirk', 1391, 13.19, 3330, 1.2, 9, 'open', 0],
+      ['Betrayed by Hero Party', 1964, 12.44, 4006, 1.0, 37, 'open', 0],
+      ['Your Roommate Reality', 4063, 14.27, 2768, 1.5, 41, 'open', 0],
+      ['Lonely MILF', 1769, 6.29, 1688, 1.0, 20, 'open', 0],
+      ['HER boyfriend Paige', 2790, 9.20, 2393, 1.0, 13, 'open', 0],
+      ['Rivalry Two Dukes', 2719, 9.81, 4462, 1.3, 13, 'open', 0],
+      ['MHA Pick Me Meko', 2657, 14.09, 1799, 1.5, 31, 'open', 0],
+    ];
+    SET.forEach(([n, chats, , , , com, mode]) => L.set(n, {
+      per1k: com / chats * 1000, total: com, mode }));
+
+    const verdict = ([n, chats, ratio, tokens, days]) => {
+      const rec = { id: n, name: n, chats, ratio, tokens, days,
+        messages: Math.round(chats * ratio), publicChats: 0, chatsPerDay: chats / days };
+      JBF._internals.evaluate(rec); return rec;
+    };
+    const hides = r => !!(r.flagged && r.confident);   // flagged alone only marks
+    const byName = n => SET.find(r => r[0] === n);
+    const bots = SET.filter(r => r[7] === 1), genuine = SET.filter(r => r[7] === 0);
+
+    const wronglyHidden = genuine.filter(r => hides(verdict(r))).map(r => r[0]);
+    ok('not one card a human called genuine is hidden',
+       wronglyHidden.length === 0,
+       wronglyHidden.join('; ') || `none of the ${genuine.length}`);
+
+    const missed = bots.filter(r => !verdict(r).flagged).map(r => r[0]);
+    ok('and every card a human called botted is at least marked',
+       missed.length === 0, missed.join('; ') || `all ${bots.length} caught`);
+
+    // The ones small enough that the numbers cannot carry a hide are marked
+    // instead. Everything past the chat floor is hidden outright.
+    const hidden = bots.filter(r => hides(verdict(r)));
+    ok('every botted card past the chat floor is hidden outright',
+       bots.filter(r => r[1] >= JBF.cfg.minChats && !hides(verdict(r)))
+           .every(r => verdict(r).flagged),
+       `${hidden.length} of ${bots.length} hidden`);
+    // Under the floor the split is by whether the depth score could be a
+    // tiny-definition artefact. A 1,815-token card at 118 chats cannot be —
+    // nothing with a definition that size was measured above 9.6 in that
+    // band — so it is hidden. A 724-token one is marked and left to you.
+    ok('and under the floor, a card with a real definition behind it is hidden',
+       (() => { const v = verdict(byName('Undertale'));
+         return v.flagged && v.confident && /only \d+ chats to have done it in/.test(v.reason);
+       })(), verdict(byName('Undertale')).reason);
+    ok('while a thin-definition one that size is only marked',
+       (() => { const v = verdict(byName('Ellen Joe'));
+         return v.flagged && !v.confident && /too little to be sure/.test(v.reason);
+       })(), verdict(byName('Ellen Joe')).reason);
+
+    // The three the depth rule cannot see at all: 1.7, 3.3 and 3.5 on depth
+    // is unremarkable, and without the silence rule all three stay up.
+    ok('the ordinary-looking bots are caught on silence alone', (() => {
+      const quiet = ['Your Sweet Step Mom', 'Emily Sweaty Submission',
+                     'Friends w Apt Benefits'].map(n => verdict(byName(n)));
+      return quiet.every(r => r.confident && r.thin < JBF.cfg.thinScore &&
+        /per 1,000 where cards this size get/.test(r.reason));
+    })(), ['Your Sweet Step Mom','Emily Sweaty Submission','Friends w Apt Benefits']
+            .map(n => verdict(byName(n)).reason).join(' | '));
+
+    // The pair that broke every single-threshold version of this rule: a
+    // botted card and a genuine one measured 11.1 and 11.0 on depth.
+    ok('two cards that measure the same are told apart by their comments', (() => {
+      const apoc = verdict(byName('Apocalyptic Sanctuary'));
+      const succ = verdict(byName('Succubus Crush'));
+      return Math.abs(apoc.thin - succ.thin) < 0.5 &&
+        hides(apoc) && succ.flagged && !succ.confident;
+    })(), `Apocalyptic ${verdict(byName('Apocalyptic Sanctuary')).thin.toFixed(1)} -> ` +
+          `${hides(verdict(byName('Apocalyptic Sanctuary'))) ? 'hidden' : 'kept'}; ` +
+          `Succubus ${verdict(byName('Succubus Crush')).thin.toFixed(1)} -> ` +
+          `${hides(verdict(byName('Succubus Crush'))) ? 'hidden' : 'kept'}`);
+
+    // A card whose creator restricted comments to followers has a suppressed
+    // count by design, so it is not a denominator either.
+    ok('a followers-only comment section is not read as silence', (() => {
+      const r = verdict(byName('Kidnapped For Content'));
+      return !r.flagged;
+    })(), verdict(byName('Kidnapped For Content')).reason);
+
+    ok('the two depth tiers leave real room, not three percent',
+       JBF.cfg.depthSure / JBF.cfg.thinScore >= 1.3,
+       `${JBF.cfg.thinScore} -> ${JBF.cfg.depthSure}`);
+
+    L.clear();
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\ncomments only ever corroborate downward');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true, useLikes: true,
+      suspected: [], whitelist: [] });
+    await sleep(60);
+    const L = JBF._internals.comments;
+    const judge = (id, chats, ratio, tokens, days) => {
+      const rec = { id, name: 'x', chats, ratio, days, tokens,
+        messages: Math.round(chats * ratio), publicChats: 0, chatsPerDay: chats / days };
+      JBF._internals.evaluate(rec); return rec;
+    };
+
+    // A healthy comment count was briefly allowed to rescue a thin card.
+    // Then the labelled set was re-measured together: two cards judged
+    // botted by hand carry 15.1 and 24.6 comments per 1,000 chats, against
+    // 14.5 on a genuine one. A busy comment section says nothing about
+    // legitimacy, so a rescue on that basis just hides the wrong half.
+    L.set('sofia',   { per1k: 15.1, total: 11, mode: 'open' });   // botted
+    L.set('lesbian', { per1k: 24.6, total: 10, mode: 'open' });   // botted
+    const sofia   = judge('sofia', 731, 10.8, 473, 1);
+    const lesbian = judge('lesbian', 407, 24.6, 639, 1);
+    ok('a well-liked card that is still far too thin is hidden anyway',
+       sofia.confident && lesbian.confident,
+       `sofia ${sofia.over.toFixed(2)}x, lesbian ${lesbian.over.toFixed(2)}x`);
+    ok('and the reason does not cite the comments as a defence',
+       !/people liked it/.test(sofia.reason), sofia.reason);
+
+    // Downward, they decide — inside the band where they were measured.
+    // A card at 2,000 chats with two comments is hidden on that alone,
+    // whatever its depth score says.
+    L.set('quiet-mid', { per1k: 1.0, total: 2, mode: 'open' });
+    const quietMid = judge('quiet-mid', 2000, 12.0, 4000, 1);
+    ok('thousands of chats and nobody talking is enough on its own',
+       quietMid.flagged && quietMid.confident, quietMid.reason);
+
+    // Comments switched off freeze the count while chats keep arriving, so
+    // the rate decays on its own. Three of 74 live cards had them off and
+    // all three were ordinary, so this is not evidence in either direction.
+    L.set('closed', { per1k: 0.5, total: 1, mode: 'disabled' });
+    const closed = judge('closed', 2000, 12.0, 4000, 1);
+    ok('a card with comments switched off is not judged on its comment rate',
+       !closed.flagged, closed.reason);
+
+    // Below the chat floor, whether a card can be hidden turns on whether the
+    // depth score could be a small-denominator artefact. Of 40 live cards
+    // between 50 and 260 chats, the seven past twice the threshold ALL had
+    // 606 tokens or fewer; of the 30 with 1,000+ tokens the highest score was
+    // 9.6. So a thin-definition card that size is only ever marked...
+    L.set('tiny-thin', { per1k: 0, total: 0, mode: 'open' });
+    const tinyThin = judge('tiny-thin', 80, 36.2, 279, 1);
+    ok('a tiny-definition card under the floor is marked, never hidden',
+       tinyThin.flagged && !tinyThin.confident, tinyThin.reason);
+    ok('and it names the definition it is judging on, not just the chats',
+       /too little to be sure/.test(tinyThin.reason) && /279-token/.test(tinyThin.reason),
+       tinyThin.reason);
+    // ...and one with a real definition behind the same score is hidden.
+    L.set('sub-real', { per1k: 0, total: 0, mode: 'open' });
+    const subReal = judge('sub-real', 80, 59.4, 1815, 1);
+    ok('but one with a real definition behind it is hidden',
+       subReal.flagged && subReal.confident, subReal.reason);
+    ok('the guard is the definition size, not the score', (() => {
+      // Identical depth score (25.0) and both past the ratio floor; they
+      // differ only in whether the denominator is big enough to trust.
+      const a = judge('g-a', 120, 30.0, 1200, 1);   // 30.0/1200 -> 25.0
+      const b = judge('g-b', 120, 12.5,  500, 1);   // 12.5/500  -> 25.0
+      return Math.abs(a.thin - b.thin) < 0.01 && a.confident && !b.confident;
+    })(), `a ${judge('g-a',120,30.0,1200,1).thin.toFixed(1)} ` +
+          `b ${judge('g-b',120,12.5,500,1).thin.toFixed(1)}`);
+    L.set('tiny-ok', { per1k: 25, total: 2, mode: 'open' });
+    const tinyOk = judge('tiny-ok', 80, 30, 900, 1);
+    ok('a busy comment section does not rescue it either \u2014 it is still marked',
+       tinyOk.flagged && !tinyOk.confident, tinyOk.reason);
+    ok('an ordinary small card is left alone entirely',
+       !judge('tiny-plain', 80, 12, 3000, 1).flagged,
+       judge('tiny-plain', 80, 12, 3000, 1).reason);
+    // Under 50 chats the ratio is one conversation: 34 of the 40 live cards
+    // clearing the "far out of line" bar had fewer than 50.
+    ok('and a card with almost no chats is not even marked',
+       !judge('tiny-few', 20, 60, 900, 1).flagged,
+       judge('tiny-few', 20, 60, 900, 1).reason);
+
+    ok('the lookup never sends the session token', (() => {
+      const src = JBF._internals.publicGet.toString();
+      return /credentials: 'omit'/.test(src) && !/authToken|authorization/i.test(src);
+    })());
+
+    L.clear();
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\na marginal call is a question, not a verdict');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true,
+      suspected: [], whitelist: [] });
+    await sleep(80);
+    const judge = (chats, ratio, tokens, days) => {
+      const rec = { id: 'c' + chats + tokens, name: 'x', chats, ratio, days, tokens,
+        messages: Math.round(chats * ratio), publicChats: 0, chatsPerDay: chats / days };
+      JBF._internals.evaluate(rec); return rec;
+    };
+    // Re-measured together, the labelled cards DO NOT separate cleanly here.
+    // A botted card sits at 11.1 and a genuine one at 10.8 — three percent
+    // apart. That is the whole reason this band exists: depth alone marks,
+    // and only a second signal converts a mark into a hide.
+    const L = JBF._internals.comments;
+    const justUnder = judge(1313, 13.6, 1351, 1);   // "Succubus Crush" ~0.92x
+    const justOver  = judge(477, 16.3, 1452, 1);    // "Apocalyptic Sanctuary" ~1.02x
+    ok('a card just under the line is flagged but not hidden',
+       justUnder.flagged && !justUnder.confident,
+       `${justUnder.over.toFixed(2)}x of the threshold`);
+    ok('and it says how close it came, and what to do',
+       /close to the line/.test(justUnder.reason) && /shift-click/i.test(justUnder.reason),
+       justUnder.reason);
+    ok('a card just over it is marked, not hidden, on depth alone',
+       justOver.flagged && !justOver.confident, `${justOver.over.toFixed(2)}x`);
+
+    // Same card, now with the comment rate the engine's lookup would fetch.
+    L.set('c4771452', { per1k: 1.9, total: 1, mode: 'open' });
+    const corroborated = judge(477, 16.3, 1452, 1);
+    ok('and hidden once the comments agree',
+       corroborated.flagged && corroborated.confident, corroborated.reason);
+
+    // The genuine card at practically the same score, with a busy comment
+    // section, must survive that same second look.
+    L.set('c13131351', { per1k: 13.7, total: 18, mode: 'open' });
+    const survives = judge(1313, 13.6, 1351, 1);
+    ok('while the genuine card at the same score survives the second look',
+       survives.flagged && !survives.confident, survives.reason);
+
+    // Past the upper tier nothing else is needed.
+    const blatant = judge(407, 24.6, 639, 1);       // "I married a lesbian" 3.5x
+    ok('a card far past the second tier is hidden with no corroboration',
+       blatant.flagged && blatant.confident && !L.has('c407639'), blatant.reason);
+    L.clear();
+
+    ok('nothing well under the line is touched',
+       !judge(1779, 17.6, 6598, 1).flagged, 'the most engaged genuine card measured');
+
+    // On the page: marked cards stay visible, confident ones go.
+    await sleep(60);
+    const recs = JBF._internals.records.filter(r => !r.isReplacement);
+    const hiddenOnes = recs.filter(r => r.flagged && r.confident);
+    ok('confident verdicts are the only ones hidden', hiddenOnes.every(r =>
+       r.root.style.display === 'none'),
+       hiddenOnes.map(r => r.name).join(', ') || 'none flagged here');
+    ok('a marked-but-unsure card stays on the page', recs
+       .filter(r => r.flagged && !r.confident)
+       .every(r => r.root.style.display !== 'none'));
+
+    // The panel has to be able to show its working, or a hidden card
+    // leaves no trace and nobody can find out why it went.
+    const st = JBF.getStats();
+    ok('every verdict is reported with its reason',
+       Array.isArray(st.verdicts) && st.verdicts.length === st.flagged &&
+       st.verdicts.every(v => v.id && v.name && v.reason),
+       `${(st.verdicts || []).length} verdicts for ${st.flagged} flagged`);
+
+    // Tiny cards are noise, and the measurement says how much: median depth
+    // across 139 live cards under 400 chats runs 18.5 at 1-50 chats and 5.4
+    // at 100-200. Below the floor nothing is ever HIDDEN — the most a card
+    // that size earns is an outline and the number, for you to settle.
+    const tiny = judge(118, 34.7, 724, 1);
+    ok('cards too small to mean anything are never hidden',
+       JBF.cfg.minChats >= 200 && !(tiny.flagged && tiny.confident),
+       'floor ' + JBF.cfg.minChats + ', ' + tiny.reason);
+
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\nmarking a card yourself');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'badge', enabled: true, suspected: [], whitelist: [] });
+    await sleep(80);
+
+    const passed = JBF._internals.records.find(r => !r.flagged && !r.isReplacement &&
+      r.chats >= JBF.cfg.minChats && r.thin !== null);
+    ok('a card that passed still gets a badge to click', (() => {
+      const b = passed && passed.root.querySelector('.jbf-badge');
+      return !!b && b.classList.contains('jbf-badge--quiet');
+    })(), passed ? passed.name : 'no unflagged card');
+
+    const badge = passed.root.querySelector('.jbf-badge');
+    badge.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+    await sleep(120);
+    ok('shift-clicking it records your verdict',
+       JBF.cfg.suspected.includes(passed.id), JSON.stringify(JBF.cfg.suspected));
+    ok('and that actually hides it, not just notes it',
+       JBF._internals.records.find(r => r.id === passed.id).flagged,
+       JBF._internals.records.find(r => r.id === passed.id).reason);
+    ok('the reason says it was your call',
+       /you marked this one as botted/.test(
+         JBF._internals.records.find(r => r.id === passed.id).reason));
+
+    // Shift-clicking again undoes it.
+    const again = passed.root.querySelector('.jbf-badge');
+    again.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+    await sleep(120);
+    ok('shift-clicking again takes it back',
+       !JBF.cfg.suspected.includes(passed.id), JSON.stringify(JBF.cfg.suspected));
+
+    // The two verdicts are opposites, so one must clear the other.
+    await JBF.saveCfg({ suspected: [passed.id], whitelist: [] });
+    await sleep(80);
+    passed.root.querySelector('.jbf-badge')
+      .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await sleep(120);
+    ok('marking it fine clears the botted mark',
+       JBF.cfg.whitelist.includes(passed.id) && !JBF.cfg.suspected.includes(passed.id),
+       `fine=${JBF.cfg.whitelist.length} botted=${JBF.cfg.suspected.length}`);
+
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
     await JBF.saveCfg({});
   })();
 
@@ -1420,8 +1813,191 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
       await drag(Number(range.min) + 2);
       ok(`${rule}: moving it changes ${setting}`, JBF.cfg[setting] !== before,
          `${before} -> ${JBF.cfg[setting]}`);
+      // The depth rule has two tiers. Dragging the slider has to carry both
+      // or the mark line passes the hide line and the middle tier — the one
+      // that asks the comments before deciding — silently disappears.
+      if (rule === 'thin') {
+        for (const at of [Number(range.min) + 2, 60, Number(range.max) - 2]) {
+          await drag(at);
+          ok(`thin: the two tiers stay in order at ${at}`,
+             JBF.cfg.depthSure > JBF.cfg.thinScore,
+             `${JBF.cfg.thinScore} -> ${JBF.cfg.depthSure}`);
+        }
+      }
     }
     await JBF.saveCfg({ rule: 'peer' });
+  })();
+
+  console.log('\nthe two depth tiers cannot be put out of order');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    // Inverted by hand: the "sure" line below the "suspect" line. Left alone
+    // this collapses the middle tier and every marked card hides at once.
+    await JBF.saveCfg({ thinScore: 15, depthSure: 11 });
+    ok('an inverted pair is repaired on save', JBF.cfg.depthSure > JBF.cfg.thinScore,
+       `${JBF.cfg.thinScore} -> ${JBF.cfg.depthSure}`);
+    await JBF.saveCfg({ thinScore: 11, depthSure: 11 });
+    ok('and so is a collapsed one', JBF.cfg.depthSure > JBF.cfg.thinScore,
+       `${JBF.cfg.thinScore} -> ${JBF.cfg.depthSure}`);
+    // Every preset ships ordered.
+    const bad = Object.entries(JBF.PRESETS)
+      .filter(([, p]) => !(p.depthSure > p.thinScore)).map(([n]) => n);
+    ok('every preset ships with its tiers in order', bad.length === 0,
+       bad.join(', ') || 'all three');
+    // The guards each preset inherits have to keep clear of the populations
+    // they were measured against: 26,652 chats is the smallest live card the
+    // depth rule misreads, 4.66 the lowest genuine comment rate in the band.
+    const tight = Object.entries(JBF.PRESETS).filter(([, p]) =>
+      (p.trustAbove > 0 && 26652 / p.trustAbove < 1.25) ||
+      (p.silenceRatio > 0 && 4.66 / p.silenceRatio < 1.25)).map(([n]) => n);
+    ok('and with margin over what was actually measured', tight.length === 0,
+       tight.join(', ') || 'all three clear 1.25x');
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\nthe panel can switch the new rule off');
+  await (async function () {
+    const root = window.document.getElementById('jbf-panel-host').shadowRoot;
+    const box = root.getElementById('flagSilence');
+    ok('the silence rule has its own switch in the panel', !!box,
+       box ? 'present' : 'missing');
+    ok('and the switch is wired to the setting', (() => {
+      if (!box) return false;
+      const before = JBF.cfg.flagSilence;
+      box.checked = !before;
+      box.dispatchEvent(new window.Event('change'));
+      const flipped = JBF.cfg.flagSilence !== before;
+      box.checked = before;
+      box.dispatchEvent(new window.Event('change'));
+      return flipped;
+    })());
+  })();
+
+  console.log('\nsilence is only readable inside the band it was measured in');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true, useLikes: true,
+      flagSilence: true, suspected: [], whitelist: [] });
+    await sleep(60);
+    const L = JBF._internals.comments;
+    // Real ages matter: at a made-up 30 days these cards look like they are
+    // gaining thousands of chats a day and the velocity rule fires instead,
+    // which would have made this block pass for the wrong reason.
+    const judge = (id, chats, comments, ratio, tokens, days) => {
+      L.set(id, { per1k: comments / chats * 1000, total: comments, mode: 'open' });
+      days = days || 400;
+      const rec = { id, name: id, chats, ratio, days, tokens,
+        messages: Math.round(chats * ratio), publicChats: 0, chatsPerDay: chats / days };
+      JBF._internals.evaluate(rec); return rec;
+    };
+    const hides = r => !!(r.flagged && r.confident);
+
+    // THE MEASUREMENT THIS RULE ALMOST SHIPPED WITHOUT. Across 74 live cards
+    // past the chat floor, comments per 1,000 chats falls hard with size:
+    // median 8.3 at 400-2k chats, 5.5 at 2k-7k, 3.2 at 7k-30k, 2.8 at
+    // 30k-80k. A flat "under 4 per 1,000" cut — which the hand-labelled set
+    // on its own appeared to support — hides 73% of the live sample. Every
+    // card below is real, ordinary, and nobody's idea of botted.
+    const ORDINARY_BIG = [
+      ['gojo',        167638,  545, 12.0, 2638, 1072],
+      ['levi',         26652,   50, 47.3, 1159, 1134],
+      ['task-force',   66386,  241, 32.4, 4770,  798],
+      ['chatgpt-plus',168834,  459, 20.1, 1599, 1120],
+      ['naruto-rpg',   69459,  126, 64.1, 7471,  487],
+      ['story-gen',    85844,   62, 33.6,  206,  979]
+    ];
+    const wronglyHidden = ORDINARY_BIG.filter(r => hides(judge.apply(null, r)))
+      .map(r => r[0]);
+    ok('six large ordinary cards, all under 4 comments per 1,000, survive',
+       wronglyHidden.length === 0, wronglyHidden.join(', ') || 'all six kept');
+
+    // Inside the band, the same rate is the whole verdict.
+    ok('a card in the band with the same rate is hidden',
+       hides(judge('in-band', 2281, 3, 12.5, 4800, 60)),
+       judge('in-band', 2281, 3, 12.5, 4800, 60).reason);
+
+    // The band ceiling (7,000) sits below the default guard (10,000), but the
+    // cautious preset moves the guard to 6,000 — inside the band. Silence has
+    // to respect it, or that preset hides a card the depth rule would only
+    // mark, in the same breath.
+    ok('silence respects the broad-audience guard too', (() => {
+      const g = JBF.cfg.trustAbove;
+      JBF.cfg.trustAbove = 6000;
+      const r = judge('broad-quiet', 6500, 5, 12.0, 4000, 60);
+      JBF.cfg.trustAbove = g;
+      return !hides(r);
+    })());
+
+    ok('but not one just under the band',
+       !hides(judge('too-small', 900, 1, 12.5, 4800, 60)),
+       judge('too-small', 900, 1, 12.5, 4800, 60).reason);
+    ok('and not one just over it',
+       !hides(judge('too-big', 9000, 12, 12.5, 4800, 60)),
+       judge('too-big', 9000, 12, 12.5, 4800, 60).reason);
+
+    // The lowest ordinary rate measured in the band was 4.5; the highest
+    // botted one 2.2. The threshold sits between them with room on each side.
+    ok('the threshold keeps room on both sides of what was measured',
+       JBF.cfg.silenceRatio > 2.2 * 1.25 && JBF.cfg.silenceRatio < 4.5 / 1.25,
+       String(JBF.cfg.silenceRatio));
+    ok('a card at the lowest ordinary rate measured is not touched',
+       !hides(judge('ordinary-band', 5516, 25, 18.5, 6537, 60)),
+       judge('ordinary-band', 5516, 25, 18.5, 6537, 60).reason);
+
+    ok('the rule can be switched off on its own', (() => {
+      JBF.cfg.flagSilence = false;
+      const off = !hides(judge('in-band-2', 2281, 3, 12.5, 4800, 60));
+      JBF.cfg.flagSilence = true;
+      return off;
+    })());
+
+    // Spending a request on every card would be rude to the site and slow
+    // for you. Only cards already in question, or sitting in the band where
+    // silence is readable, are worth one.
+    ok('no lookup is spent on a card outside the band that nothing flagged', (() => {
+      const src = JBF._internals.askAboutFlagged
+        ? JBF._internals.askAboutFlagged.toString() : '';
+      return /silenceMinChats/.test(src) && /silenceMaxChats/.test(src);
+    })());
+
+    L.clear();
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\na broad audience is expensive to fake');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true, suspected: [], whitelist: [] });
+    await sleep(60);
+    const judge = (chats, ratio, tokens, days) => {
+      const rec = { id: 'b' + chats + tokens, name: 'x', chats, ratio, days, tokens,
+        messages: Math.round(chats * ratio), publicChats: 0, chatsPerDay: chats / days };
+      JBF._internals.evaluate(rec); return rec;
+    };
+    // Depth's premise is "not enough character there to talk that long", and
+    // it breaks on one kind of card: the tiny famous utility card where the
+    // PLAYER supplies everything. Seven live cards scored past the upper
+    // tier on ratio alone — a 206-token Story Generator, a 120-token one
+    // with 329,054 chats. All seven had 26,652 chats or more.
+    const famousThin = judge(85844, 33.6, 206, 979);
+    ok('a 206-token card with 85,844 chats is not hidden on its ratio',
+       famousThin.flagged && !famousThin.confident, famousThin.reason);
+    ok('and it says why it was spared',
+       /too broad an audience/.test(famousThin.reason), famousThin.reason);
+    // The same shape at a size a botter can actually reach is still hidden.
+    const reachable = judge(900, 33.6, 206, 1);
+    ok('the same card at 900 chats is hidden',
+       reachable.flagged && reachable.confident, reachable.reason);
+    ok('the guard sits in the gap between the two populations',
+       JBF.cfg.trustAbove > 4181 && JBF.cfg.trustAbove < 26652,
+       String(JBF.cfg.trustAbove));
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
   })();
 
   console.log(`\n${pass} passed, ${fail} failed\n`);

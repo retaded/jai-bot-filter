@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 # takes for installs to pick it up.
 GH_USER="retaded"
 GH_REPO="jai-bot-filter"
-VERSION="6.0.0"
+VERSION="7.1.1"
 # ---------------------------------------------------------------------
 
 OUT="dist/jai-bot-filter.user.js"
@@ -24,7 +24,7 @@ cat > "$OUT" <<'HEADER'
 // @name         J.AI Bot Filter
 // @namespace    __HOME__
 // @version      __VERSION__
-// @description  Hides JanitorAI bots producing more conversation than their character definition can account for, and fills the gaps with clean ones from further down the list.
+// @description  Hides botted JanitorAI cards - ones producing more conversation than their character definition can account for, and ones whose thousands of chats left almost no comments behind - and fills the gaps with clean cards from further down the list.
 // @author       __GH_USER__
 // @license      MIT
 // @homepageURL  __HOME__
