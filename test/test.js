@@ -1529,8 +1529,11 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
   console.log('\ncomments only ever corroborate downward');
   await (async function () {
     const was = JSON.parse(JSON.stringify(JBF.cfg));
-    await JBF.saveCfg({ rule: 'thin', mode: 'hide', enabled: true, useLikes: true,
-      suspected: [], whitelist: [] });
+    // Pin the calibration. Earlier blocks drag the slider, and every rule
+    // here is about which tier a card lands in — an inherited threshold has
+    // silently broken this block twice.
+    await JBF.saveCfg(Object.assign({}, JBF.PRESETS.balanced, { rule: 'thin',
+      mode: 'hide', enabled: true, useLikes: true, suspected: [], whitelist: [] }));
     await sleep(60);
     const L = JBF._internals.comments;
     const judge = (id, chats, ratio, tokens, days) => {
@@ -2057,6 +2060,135 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
     await JBF.saveCfg({});
   })();
 
+  console.log('\nthe dial may not drag the hide line into the genuine range');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    // Past depthSure the depth score decides ALONE, so that line may never
+    // sit inside the measured genuine range, which runs to 11.0. The dial's
+    // aggressive end used to put it at 8.2 and hide a card labelled plainly
+    // fine at 8.5 with no second opinion.
+    for (const t of [6, 7, 8, 11, 16, 22]) {
+      await JBF.saveCfg({ thinScore: t, depthSure: Math.round(t * 1.36 * 10) / 10 });
+      ok(`dial ${t}: the hide line stays clear of the genuine range`,
+         JBF.cfg.depthSure >= 11, String(JBF.cfg.depthSure));
+    }
+    // And at that dial the card in question is left completely alone.
+    await JBF.saveCfg(Object.assign({}, JBF.PRESETS.strict, { rule: 'thin',
+      mode: 'hide', enabled: true, useLikes: true, suspected: [], whitelist: [],
+      thinScore: 6, depthSure: 8.2 }));
+    await sleep(40);
+    const L = JBF._internals.comments;
+    L.set('dad', { per1k: 21 / 1377 * 1000, total: 21, mode: 'open' });
+    JBF._internals.setScoreFor(() => ({ multiple: 2.42, expected: 10.39, deviations: 1 }));
+    const dad = { id: 'dad', name: 'x', chats: 1377, ratio: 25.12, tokens: 2951,
+      days: 1, messages: 34588, publicChats: 0, chatsPerDay: 1377 };
+    JBF._internals.evaluate(dad);
+    JBF._internals.setScoreFor(null);
+    ok('a card at 1.8x its cohort comment rate is cleared, not marked',
+       !dad.flagged, dad.reason);
+    // But a card held out of the top tier by the peer guard keeps its
+    // outline however busy its comments: a confirmed bot sat at 2.3x.
+    L.set('sofia', { per1k: 14 / 742 * 1000, total: 14, mode: 'open' });
+    JBF._internals.setScoreFor(() => ({ multiple: 1.1, expected: 9.7, deviations: 1 }));
+    const sofia = { id: 'sofia', name: 'x', chats: 742, ratio: 10.70, tokens: 473,
+      days: 1, messages: 7938, publicChats: 0, chatsPerDay: 742 };
+    JBF._internals.evaluate(sofia);
+    JBF._internals.setScoreFor(null);
+    ok('but one demoted from the top tier still keeps its outline',
+       sofia.flagged, sofia.reason);
+    L.clear();
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\nthe growth-shape rules mark rather than hide');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    await JBF.saveCfg(Object.assign({}, JBF.PRESETS.balanced, { rule: 'thin',
+      mode: 'hide', enabled: true, useLikes: true, flagFlatGrowth: true,
+      suspected: [], whitelist: [] }));
+    await sleep(40);
+    const L = JBF._internals.comments;
+    const H = JBF._internals.history;
+    const judge = (id, com, chats) => {
+      L.set(id, { per1k: com / chats * 1000, total: com, mode: 'open' });
+      // Nine sightings, evenly spaced over 18 hours, with identical chat
+      // increments: traffic arriving at a perfectly constant rate.
+      const now = Date.now(), rows = [];
+      for (let i = 0; i <= 8; i++) {
+        rows.push([now - (8 - i) * 2.25 * 36e5,
+                   chats - (8 - i) * 60, Math.round((chats - (8 - i) * 60) * 7.88)]);
+      }
+      H.set(id, rows);
+      const rec = { id, name: id, chats, ratio: 7.88, tokens: 2630, days: 1,
+        messages: Math.round(chats * 7.88), publicChats: 0, chatsPerDay: chats };
+      JBF._internals.evaluate(rec); return rec;
+    };
+    // Every live flatness reading this project has is from a card judged
+    // genuine (1.31, 1.36, 1.53) and the threshold of 1.35 splits the first
+    // two by four percent. The rule came from simulation, never measurement.
+    const quiet = judge('flat-quiet', 1, 774);
+    ok('metered-looking growth is marked, never hidden',
+       quiet.flagged && !quiet.confident, quiet.reason);
+    const loud = judge('flat-loud', 9, 774);
+    ok('and a comment section above its cohort clears it outright',
+       !loud.flagged, loud.reason);
+    L.clear();
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
+  console.log('\nan odd rate with nobody talking is enough on its own');
+  await (async function () {
+    const was = JSON.parse(JSON.stringify(JBF.cfg));
+    const L = JBF._internals.comments;
+    const judge = (id, chats, ratio, tokens, com, peer) => {
+      JBF._internals.setScoreFor(() => ({ multiple: peer, expected: ratio / peer, deviations: 1 }));
+      L.set(id, { per1k: com / chats * 1000, total: com, mode: 'open' });
+      const rec = { id, name: id, chats, ratio, days: 1, tokens,
+        messages: Math.round(chats * ratio), publicChats: 0, chatsPerDay: chats };
+      JBF._internals.evaluate(rec);
+      JBF._internals.setScoreFor(null);
+      return rec;
+    };
+    // A hand-labelled bot that every other rule missed. 16.3 msg/chat on a
+    // 2,635-token card is depth 6.2 — unremarkable, and the definition is
+    // real, so no token rule could ever see it. What it was: 2.71x its
+    // cohort with not one comment on 307 chats.
+    for (const [name, preset] of Object.entries(JBF.PRESETS)) {
+      await JBF.saveCfg(Object.assign({}, preset, { rule: 'thin', mode: 'hide',
+        enabled: true, useLikes: true, suspected: [], whitelist: [] }));
+      await sleep(30);
+      const r = judge('hotel-' + name, 307, 16.31, 2635, 0, 2.71);
+      ok(`${name}: it is hidden`, r.flagged && r.confident, r.reason);
+      ok(`${name}: on the cohort rate, not the token count`,
+         /what cards its size and age run at/.test(r.reason), r.reason);
+    }
+    await JBF.saveCfg(Object.assign({}, JBF.PRESETS.balanced, { rule: 'thin' }));
+    await sleep(30);
+    // Both halves are required. The quiet genuine cards top out at 2.17 on
+    // the peer score; the ones above that all have people talking.
+    ok('an odd rate with a busy comment section is not',
+       !judge('loud', 1427, 24.81, 2951, 51, 2.39).flagged,
+       judge('loud', 1427, 24.81, 2951, 51, 2.39).reason);
+    ok('and a dead comment section at an ordinary rate is not either', (() => {
+      const r = judge('ordinary', 1446, 19.29, 4074, 6, 1.84);
+      return !(r.flagged && /what cards its size and age run at/.test(r.reason));
+    })(), judge('ordinary', 1446, 19.29, 4074, 6, 1.84).reason);
+    ok('the rule has its own switch', (() => {
+      JBF.cfg.flagOddQuiet = false;
+      const r = judge('off', 307, 16.31, 2635, 0, 2.71);
+      JBF.cfg.flagOddQuiet = true;
+      return !(r.flagged && r.confident);
+    })());
+    L.clear();
+    for (const k of Object.keys(JBF.cfg)) delete JBF.cfg[k];
+    Object.assign(JBF.cfg, was);
+    await JBF.saveCfg({});
+  })();
+
   console.log('\nthe two depth tiers cannot be put out of order');
   await (async function () {
     const was = JSON.parse(JSON.stringify(JBF.cfg));
@@ -2242,6 +2374,7 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
     // comments (-1 = never looked up), comment mode, hand label.
     const SET = [
       ['Alosha',                 44,  7893, 179.39, 50.49,  515,  0, 'open',          'bot'],
+      ['Hotel booked the room',  307,  5008,  16.31,  2.71, 2635,  0, 'open',          'bot'],
       ['Undertale',             167,  5490,  32.87,  9.25, 1815,  0, 'disabled',      'bot'],
       ['School Queen Bee',      305,  5804,  19.03,  3.02, 1722,  1, 'open',          'bot'],
       ['I married a lesbian',   416, 10317,  24.80,  null,  639, 15, 'open',          'bot'],
@@ -2289,8 +2422,18 @@ const reps = () => [...window.document.querySelectorAll('[data-jbf-replacement]'
       const wrong  = leg.filter(r => v(r) === 'hidden').map(r => r[0]);
       const noise  = leg.filter(r => v(r) !== 'clean').map(r => r[0]);
       const label = useP ? 'with a learned baseline' : 'on a fresh install';
+      // One card is only reachable once a baseline exists: its depth is 6.2
+      // off a real 2,635-token definition, so no token rule can see it, and
+      // what gives it away is 2.71x its cohort with a dead comment section.
+      // Until the peer score exists there is nothing to catch it with.
+      const needsBaseline = ['Hotel booked the room'];
+      const reallyMissed = useP ? missed : missed.filter(n => !needsBaseline.includes(n));
       ok(`${label}: no botted card goes untouched`,
-         missed.length === 0, missed.join(', ') || `all ${bots.length} caught`);
+         reallyMissed.length === 0, reallyMissed.join(', ') || `all ${bots.length} caught`);
+      if (!useP) {
+        ok('and the one that needs a baseline is named, not quietly dropped',
+           missed.every(n => needsBaseline.includes(n)), missed.join(', ') || 'none missed');
+      }
       ok(`${label}: no genuine card is hidden`,
          wrong.length === 0, wrong.join(', ') || `none of the ${leg.length}`);
       ok(`${label}: and none of them is even marked`,

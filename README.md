@@ -50,8 +50,12 @@ peer = (messages / chats) / what cards of this size and age actually run at
 Learned from the listings you browse — **no token count anywhere in it.**
 
 **The depth score cannot hide a card by itself.** This has to agree: under **2.5×** the
-card is marked and left to you however extreme its depth reads. It works the other way too,
-so a card far above its cohort can be hidden without depth being extreme.
+card is marked and left to you however extreme its depth reads.
+
+It also flags on its own. A card running **2.4× its cohort with a dead comment section** is
+hidden on those two facts, with no depth in it at all — which is the only thing that caught
+a hand-labelled bot at 16.3 msg/chat on a *2,635-token* card. Its depth was 6.2:
+unremarkable, and the definition is real, so no token rule could ever have seen it.
 
 Only *listing* pages feed this. Signed in, the home page also fills carousels from the same
 endpoint — your recently-viewed and your own chats — and those were going straight into the
@@ -87,10 +91,11 @@ size gets).
 
 | | |
 |---|---|
+| peer over **2.4×** with a dead comment section | **hidden** — no depth involved |
 | comments over **5× cohort** | **never flagged at all** on depth or peers |
 | peer under **2.5×** | **never hidden on depth**, however extreme the depth score |
-| depth over **15** | **hidden**, if the peer score agrees |
-| depth over **11** | hidden if the comment rate **or** the peer score agrees, else *marked* |
+| depth over **15** | **hidden**, if the peer score agrees — *marked* if it doesn't |
+| depth over **11** | hidden if the comment rate **or** the peer score agrees; cleared if comments run **1.3× cohort**; else *marked* |
 | depth over **9.4** | *marked* — unless the comment section is normal for its size, then left alone |
 | **1,000–7,000 chats** with under **3** comments per 1k | **hidden** |
 | **10,000+ chats** | never hidden on depth — only marked |
@@ -98,7 +103,9 @@ size gets).
 | under **3,000 messages** | not judged at all |
 
 The dial moves all of this together — the two depth tiers and the peer gate — so the
-aggressive end is aggressive on every axis rather than just sharpening one.
+aggressive end is aggressive on every axis rather than just sharpening one. It cannot drag
+the **hide** line below 11, though: past that line depth decides alone, and cards measured
+genuine run all the way up to 11.0. The *mark* line goes as low as you like.
 
 *Marked* means shown with an amber outline and the number on the badge. Shift-click hides a
 card for good; plain click marks it fine. Your call always wins.
@@ -168,6 +175,14 @@ A flagged card is "far from normal for its size", not "proven botted". Known wea
   the peer score was only ever *measured* for the recent ones; for the older cards it is
   estimated, and on those estimates three would drop from hidden to marked — including one
   that nothing but the token score can see. `peerSupport: 0` in the panel reverts it.
+- **The growth-shape rules mark, they don't hide.** Every live flatness reading in this
+  project came from a card judged genuine — 1.31, 1.36 and 1.53 — and the threshold of 1.35
+  splits the first two by four percent. The rule came from simulation, never measurement,
+  so until there are real botted readings it doesn't decide alone, and a comment section
+  above its cohort clears it.
+- **Some cards are only reachable once a baseline exists.** One hand-labelled bot has an
+  ordinary depth score off a real definition; nothing but the peer score sees it, and that
+  takes a few days of browsing to learn. A fresh install misses it.
 - **Both signals are weakest on large, old cards**, where genuine ones go quiet and famous
   minimal ones score enormous depth. Those are downgraded to marks.
 - **Everything was measured on trending and popular listings** — that's what's reachable
@@ -194,7 +209,7 @@ engine.js               API capture, the rules, hiding, replacement
 panel.js                in-page panel (shadow DOM)
 userscript-adapter.js   GM_* storage + Tampermonkey menu entries
 build.sh                concatenates the three into jai-bot-filter.user.js
-test/test.js            315 assertions
+test/test.js            335 assertions
 ```
 
 Edit the three sources, never `jai-bot-filter.user.js` — `build.sh` overwrites it.

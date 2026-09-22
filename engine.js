@@ -87,7 +87,27 @@ var JBF = (function () {
     // preset ordinary cards were reading as quiet. Banding it keeps the
     // measured behaviour for small cards and fixes the rest.
     quietFraction: 0.6,
-    quietMinChats: 400,        // below this, one comment either way is noise
+    // Below this the comment count is noise. It was 400; at 250 chats a card
+    // is already expected about two comments, which is enough for a zero to
+    // mean something, and a hand-labelled bot sat at 307.
+    quietMinChats: 250,
+
+    // --- an odd rate with nobody talking ----------------------------
+    //
+    // The peer score's own rule, with no depth in it at all. A card running
+    // this far above what its cohort gets, whose comment section is dead,
+    // is hidden on those two facts alone.
+    //
+    // This exists because a hand-labelled bot slipped past everything else:
+    // 16.3 msg/chat on a 2,635-token card is depth 6.2, unremarkable, and
+    // the definition is real so no token rule could ever see it. What it
+    // was, was 2.71x its cohort with not one comment on 307 chats.
+    //
+    // The bar clears every genuine card measured. The quiet ones reach 2.17
+    // at most; the ones above that (2.39, 2.34, 2.08) all have people
+    // talking, so the comment half spares them twice over.
+    flagOddQuiet: true,
+    peerFlag: 2.4,
 
     // A card drawing this many times the discussion its cohort gets has
     // demonstrably earned its traffic, and is never flagged on depth or the
@@ -98,6 +118,14 @@ var JBF = (function () {
     // Five sits in that gap. This does not touch the silence rule, which is
     // about the opposite end.
     vouchMultiple: 5,
+
+    // To CLEAR a depth flag in the middle tier, a comment section has to be
+    // this much above what cards its size get. Merely matching the cohort
+    // (1.0x) is enough to clear a near miss in the borderline band, where
+    // the depth evidence is weaker — but not here. Measured: a card labelled
+    // plainly genuine sits at 1.84x, while one judged suspicious sits at
+    // 1.05x and should stay marked.
+    healthyClears: 1.3,
 
     // --- silence ----------------------------------------------------
     //
@@ -226,7 +254,7 @@ var JBF = (function () {
     showPanel: true,
     // Bumped when a release changes what the filter does by default, so an
     // install doesn't stay pinned to a calibration from months ago.
-    cfgVersion: 10,
+    cfgVersion: 12,
 
     whitelist: [],
     suspected: [],           // cards you have marked as botted yourself
@@ -237,14 +265,14 @@ var JBF = (function () {
   // moving the slider keeps the two tiers in proportion rather than
   // collapsing them together at one end of the range.
   const PRESETS = {
-    cautious: { rule: 'thin', thinScore: 14, depthSure: 20, thinRatio: 12, peerSupport: 3.5, quietFraction: 0.45, silenceRatio: 2.2, maxMultiple: 3.5, lowMultiple: 5.0, peerLowSide: true, minChats: 400, trustAbove: 6000 },
-    balanced: { rule: 'thin', thinScore: 11, depthSure: 15, thinRatio: 10, peerSupport: 2.5, quietFraction: 0.6, silenceRatio: 3.0, maxMultiple: 2.25, lowMultiple: 4.0, peerLowSide: true, minChats: 200, trustAbove: 10000 },
+    cautious: { rule: 'thin', thinScore: 14, depthSure: 20, thinRatio: 12, peerSupport: 3.5, quietFraction: 0.45, peerFlag: 2.6, silenceRatio: 2.2, maxMultiple: 3.5, lowMultiple: 5.0, peerLowSide: true, minChats: 400, trustAbove: 6000 },
+    balanced: { rule: 'thin', thinScore: 11, depthSure: 15, thinRatio: 10, peerSupport: 2.5, quietFraction: 0.6, peerFlag: 2.4, silenceRatio: 3.0, maxMultiple: 2.25, lowMultiple: 4.0, peerLowSide: true, minChats: 200, trustAbove: 10000 },
     // strict's trustAbove was 25,000, which left 1.07x of daylight over the
     // smallest live card the depth rule misreads (26,652 chats). One card's
     // growth and the preset reintroduces the bug the guard exists to stop.
     // Its silenceRatio was 4.0 against a lowest-measured genuine card of
     // 4.66 — 1.16x, which is not a margin either.
-    strict:   { rule: 'thin', thinScore: 7, depthSure: 10, thinRatio: 8, peerSupport: 1.2, quietFraction: 0.85, silenceRatio: 3.5, maxMultiple: 1.9, lowMultiple: 3.0, peerLowSide: true, minChats: 100, trustAbove: 20000 }
+    strict:   { rule: 'thin', thinScore: 7, depthSure: 10, thinRatio: 8, peerSupport: 1.2, quietFraction: 0.85, peerFlag: 2.0, silenceRatio: 3.5, maxMultiple: 1.9, lowMultiple: 3.0, peerLowSide: true, minChats: 100, trustAbove: 20000 }
   };
 
   let cfg = Object.assign({}, DEFAULTS);
@@ -651,6 +679,13 @@ var JBF = (function () {
   // them out of order; see normaliseTiers.
   const TIER_GAP = 1.36;
 
+  // Past depthSure the depth score hides a card ON ITS OWN, so that line may
+  // never sit inside the range of cards measured genuine — which runs up to
+  // 11.0. The dial used to drag it to 8.2 at the aggressive end, below a
+  // card labelled plainly fine at 8.5, and hid it with no second opinion.
+  // The MARK line is free to go as low as you like; this one is not.
+  const DEPTH_SURE_FLOOR = 11;
+
   const GX = 22, GA = 14;
   // Leave-one-out on 1,954 live cards: a neighbourhood of ~81 fits better
   // than 151 (median |residual| 0.231 vs 0.236).
@@ -971,7 +1006,8 @@ var JBF = (function () {
     // trips, which made the export's `gates` column describe a config the
     // user had already moved off.
     rec.trusted = rec.runsNormal = rec.runsOdd = rec.earnsIt = false;
-    rec.quiet = rec.silent = rec.healthyComments = rec.vouched = false;
+    rec.quiet = rec.silent = rec.healthyComments = false;
+    rec.vouched = rec.commentsClear = false;
     if (!cfg.enabled) return rec;
 
     // Talk per 1,000 tokens of character, at this card's age. No baseline,
@@ -1025,6 +1061,9 @@ var JBF = (function () {
     // Unlike healthyComments, which only clears a near miss, this clears the
     // depth and peer rules outright \u2014 they are both arguments that the
     // conversation cannot be real, and this is the conversation.
+    rec.commentsClear = (cfg.useLikes && cfg.healthyClears > 0 &&
+      rec.commentMode === 'open' && rec.comPer1k != null &&
+      rec.comPer1k >= expectedComments(rec.chats) * cfg.healthyClears);
     rec.vouched = (cfg.useLikes && cfg.vouchMultiple > 0 &&
       rec.commentMode === 'open' && rec.comPer1k != null &&
       rec.comPer1k >= expectedComments(rec.chats) * cfg.vouchMultiple);
@@ -1077,17 +1116,27 @@ var JBF = (function () {
     // configured rate does not.
     const g = rec.shape;
     if (g) {
+      // MARKED, not hidden, and cleared outright by a comment section above
+      // its cohort. Every live flatness reading this project has is from a
+      // card judged genuine — 1.31, 1.36 and 1.53 — and the threshold of
+      // 1.35 splits the first two by four percent. The rule came from
+      // simulation, never measurement, so until there are real botted
+      // readings to calibrate against it does not get to decide alone.
       if (cfg.flagFlatGrowth && g.spans >= 5 &&
           g.hours >= SHAPE_MIN_HOURS && g.medGap <= SHAPE_MAX_GAP_H &&
-          isFinite(g.burstiness) && g.burstiness < cfg.maxFlatness) {
+          isFinite(g.burstiness) && g.burstiness < cfg.maxFlatness &&
+          !rec.healthyComments) {
         rec.flagged = true;
+        rec.confident = false;
         rec.reason = `chats arriving at a near-constant rate for ${Math.round(g.hours)}h ` +
           `(busiest stretch only ${g.burstiness.toFixed(2)}x the quietest)`;
         return rec;
       }
       if (cfg.flagStaleRatio && g.drift !== null && g.gained >= 150 &&
-          g.hours >= DRIFT_MIN_HOURS && g.drift < cfg.maxRatioDrift) {
+          g.hours >= DRIFT_MIN_HOURS && g.drift < cfg.maxRatioDrift &&
+          !rec.healthyComments) {
         rec.flagged = true;
+        rec.confident = false;
         rec.reason = `its ${rec.ratio.toFixed(1)} msg/chat is history — the ` +
           `${Math.round(g.gained).toLocaleString('en-US')} chats since you first saw it ` +
           `are running at ${g.incRatio.toFixed(1)}`;
@@ -1197,6 +1246,20 @@ var JBF = (function () {
       return rec;
     }
 
+    // An odd rate for its cohort AND a dead comment section. Two token-free
+    // signals agreeing, which is the same standard every other hide here is
+    // held to — see peerFlag in the config.
+    if (cfg.flagOddQuiet && cfg.rule === 'thin' && sc && !broadAudience &&
+        cfg.peerFlag > 0 && sc.multiple >= cfg.peerFlag && rec.quiet) {
+      rec.flagged = true;
+      rec.confident = true;
+      rec.reason = `${rec.ratio.toFixed(1)} msg/chat is ${sc.multiple.toFixed(1)}x ` +
+        'what cards its size and age run at, and ' +
+        (rec.comCount === 0 ? 'not one comment to show for it'
+          : `only ${rec.comPer1k.toFixed(1)} comments per 1,000 chats to show for it`);
+      return rec;
+    }
+
     // Thin card carrying a big conversation count. Scoped to its own rule,
     // though the number is computed under all of them for the export.
     //
@@ -1215,7 +1278,13 @@ var JBF = (function () {
       // inverted config: depthSure below thinScore would make every marked
       // card clear the upper tier at once, collapsing the middle one.
       const sureAt = Math.max(cfg.depthSure, cfg.thinScore);
-      if (rec.thin > sureAt && !broadAudience && !runsNormal) {
+      // Past this line depth would decide alone. A card can still be held
+      // back from it by the peer guard or a broad audience — but it is then
+      // MARKED, never cleared: a depth that extreme has earned an outline
+      // whatever else agrees. Only a card genuinely in the middle tier can
+      // be cleared by its comment section.
+      const pastSure = rec.thin > sureAt;
+      if (pastSure && !broadAudience && !runsNormal) {
         rec.confident = true;
         rec.reason = thinNote;
         return rec;
@@ -1234,6 +1303,18 @@ var JBF = (function () {
         rec.confident = true;
         rec.reason = thinNote + `, and ${sc.multiple.toFixed(1)}x the rate ` +
           'cards of its size and age actually run at';
+        return rec;
+      }
+      // The middle tier is "depth needs corroboration". A comment section at
+      // or above what cards its size get is corroboration pointing the other
+      // way, so it clears rather than marks. Only in this tier: past
+      // depthSure a card is hidden regardless, because the loudest
+      // hand-labelled bot still ran 4.3x its cohort rate.
+      if (rec.commentsClear && !pastSure) {
+        rec.flagged = false;
+        rec.reason = thinNote + `, but ${rec.comPer1k.toFixed(1)} comments per ` +
+          `1,000 chats is ${(rec.comPer1k / expectedComments(rec.chats)).toFixed(1)}x ` +
+          'what cards its size get';
         return rec;
       }
       rec.confident = false;
@@ -2129,6 +2210,10 @@ var JBF = (function () {
         cfg.vouchMultiple = DEFAULTS.vouchMultiple;
         delete cfg.quietRatio;          // flat; banded as quietFraction in v10
         cfg.quietFraction = DEFAULTS.quietFraction;
+        cfg.healthyClears = DEFAULTS.healthyClears;
+        cfg.quietMinChats = DEFAULTS.quietMinChats;
+        cfg.flagOddQuiet = DEFAULTS.flagOddQuiet;
+        cfg.peerFlag = DEFAULTS.peerFlag;
         cfg.cfgVersion = DEFAULTS.cfgVersion;
         if (storage) { try { storage.set(cfg); } catch (e) { /* best effort */ } }
       }
@@ -2199,6 +2284,7 @@ var JBF = (function () {
     if (!(c.depthSure > c.thinScore)) {
       c.depthSure = Math.round(c.thinScore * TIER_GAP * 10) / 10;
     }
+    if (c.depthSure < DEPTH_SURE_FLOOR) c.depthSure = DEPTH_SURE_FLOOR;
     return c;
   }
 
