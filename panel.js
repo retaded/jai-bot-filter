@@ -252,6 +252,25 @@ var JBF_PANEL = (function () {
                 </label>
               </div>
               <div class="row">
+                <label for="peerSupport">Only hide a card running over
+                  <span class="why">Times the msg/chat that cards of its own size and age
+                  actually get — learned from listings you browse, with no card size in
+                  it. The depth score cannot hide a card on its own any more; this has to
+                  agree. 0 lets it decide alone.</span>
+                </label>
+                <input type="number" id="peerSupport" min="0" max="10" step="0.1">
+                <span class="unit">&times; normal</span>
+              </div>
+              <div class="row">
+                <label for="hideMessages">Don't hide anything under
+                  <span class="why">Total messages, not chats — the question is whether
+                  a card has done enough to answer for it. Below this it can still be
+                  marked. 4,000 keeps every hand-labelled bot; 5,000 loses two.</span>
+                </label>
+                <input type="number" id="hideMessages" min="0" max="200000" step="500">
+                <span class="unit">msgs</span>
+              </div>
+              <div class="row">
                 <input type="checkbox" id="flagSilence">
                 <label for="flagSilence">Flag chats nobody comments on
                   <span class="why">Thousands of chats leaving almost no comments behind.
@@ -377,8 +396,8 @@ var JBF_PANEL = (function () {
       lists[k] = e.target.checked;
       api.save({ lists });
     }));
-    ['highRatio', 'lowRatio', 'maxChatsPerDay', 'minChats', 'trustAbove', 'lowMultiple']
-      .forEach(k => bindNum(k, k));
+    ['highRatio', 'lowRatio', 'maxChatsPerDay', 'minChats', 'trustAbove', 'lowMultiple',
+     'hideMessages', 'peerSupport'].forEach(k => bindNum(k, k));
 
     // Label tracks the drag; the page only re-filters on release. Right is
     // always more aggressive, which means a SMALLER number, so both
@@ -391,6 +410,13 @@ var JBF_PANEL = (function () {
     // far enough puts the mark line above the hide line and the middle tier
     // vanishes. 1.36 is the spacing the labelled set measured.
     const TIER_GAP = 1.36;
+    // The peer score is the gate on every depth hide, so the slider has to
+    // move it too. Left alone, turning the dial up only sharpened depth while
+    // the gate stayed put, and the aggressive end could not reach cards whose
+    // cohort score was merely ordinary. Anchored on the balanced preset
+    // Both ends line up with the presets: the far-strict end reaches 1.2x,
+    // the same gate the strict preset uses, and the cautious end 3.5x.
+    const peerFor = t => Math.max(1.2, Math.min(3.5, Math.round(t / 5 * 10) / 10));
 
     $('peerRange').addEventListener('input', e => {
       const v = parseFloat(e.target.value);
@@ -402,7 +428,8 @@ var JBF_PANEL = (function () {
       if (!isFinite(v)) return;
       const t = posToThin(v);
       api.save(api.getCfg().rule === 'thin'
-        ? { thinScore: t, depthSure: Math.round(t * TIER_GAP * 10) / 10 }
+        ? { thinScore: t, depthSure: Math.round(t * TIER_GAP * 10) / 10,
+            peerSupport: peerFor(t) }
         : { maxMultiple: posToMult(v) });
     });
 

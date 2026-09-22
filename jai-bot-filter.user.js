@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J.AI Bot Filter
 // @namespace    https://github.com/retaded/jai-bot-filter
-// @version      7.1.1
+// @version      7.6.0
 // @description  Hides botted JanitorAI cards - ones producing more conversation than their character definition can account for, and ones whose thousands of chats left almost no comments behind - and fills the gaps with clean cards from further down the list.
 // @author       retaded
 // @license      MIT
@@ -307,6 +307,25 @@ var JBF_PANEL = (function () {
                 </label>
               </div>
               <div class="row">
+                <label for="peerSupport">Only hide a card running over
+                  <span class="why">Times the msg/chat that cards of its own size and age
+                  actually get — learned from listings you browse, with no card size in
+                  it. The depth score cannot hide a card on its own any more; this has to
+                  agree. 0 lets it decide alone.</span>
+                </label>
+                <input type="number" id="peerSupport" min="0" max="10" step="0.1">
+                <span class="unit">&times; normal</span>
+              </div>
+              <div class="row">
+                <label for="hideMessages">Don't hide anything under
+                  <span class="why">Total messages, not chats — the question is whether
+                  a card has done enough to answer for it. Below this it can still be
+                  marked. 4,000 keeps every hand-labelled bot; 5,000 loses two.</span>
+                </label>
+                <input type="number" id="hideMessages" min="0" max="200000" step="500">
+                <span class="unit">msgs</span>
+              </div>
+              <div class="row">
                 <input type="checkbox" id="flagSilence">
                 <label for="flagSilence">Flag chats nobody comments on
                   <span class="why">Thousands of chats leaving almost no comments behind.
@@ -432,8 +451,8 @@ var JBF_PANEL = (function () {
       lists[k] = e.target.checked;
       api.save({ lists });
     }));
-    ['highRatio', 'lowRatio', 'maxChatsPerDay', 'minChats', 'trustAbove', 'lowMultiple']
-      .forEach(k => bindNum(k, k));
+    ['highRatio', 'lowRatio', 'maxChatsPerDay', 'minChats', 'trustAbove', 'lowMultiple',
+     'hideMessages', 'peerSupport'].forEach(k => bindNum(k, k));
 
     // Label tracks the drag; the page only re-filters on release. Right is
     // always more aggressive, which means a SMALLER number, so both
@@ -446,6 +465,13 @@ var JBF_PANEL = (function () {
     // far enough puts the mark line above the hide line and the middle tier
     // vanishes. 1.36 is the spacing the labelled set measured.
     const TIER_GAP = 1.36;
+    // The peer score is the gate on every depth hide, so the slider has to
+    // move it too. Left alone, turning the dial up only sharpened depth while
+    // the gate stayed put, and the aggressive end could not reach cards whose
+    // cohort score was merely ordinary. Anchored on the balanced preset
+    // Both ends line up with the presets: the far-strict end reaches 1.2x,
+    // the same gate the strict preset uses, and the cautious end 3.5x.
+    const peerFor = t => Math.max(1.2, Math.min(3.5, Math.round(t / 5 * 10) / 10));
 
     $('peerRange').addEventListener('input', e => {
       const v = parseFloat(e.target.value);
@@ -457,7 +483,8 @@ var JBF_PANEL = (function () {
       if (!isFinite(v)) return;
       const t = posToThin(v);
       api.save(api.getCfg().rule === 'thin'
-        ? { thinScore: t, depthSure: Math.round(t * TIER_GAP * 10) / 10 }
+        ? { thinScore: t, depthSure: Math.round(t * TIER_GAP * 10) / 10,
+            peerSupport: peerFor(t) }
         : { maxMultiple: posToMult(v) });
     });
 
@@ -765,10 +792,24 @@ var JBF = (function () {
     // hides 73% of a live sample including Gojo Satoru and Levi Ackerman.
     // Never use this as a flat threshold; only inside a measured band.
     useLikes: true,           // stored key kept for settings compatibility
-    // Corroboration for a card depth already put between the two tiers.
-    // Genuine cards past 400 chats sat at 4.5 and up, the botted one at 1.9.
-    quietRatio: 5,
+    // Corroboration for a card depth already put between the two tiers:
+    // this fraction of what cards its size actually get. It was a flat 5,
+    // which is 0.6x the 8.3 a small card gets — but 0.9x the 5.5 of a
+    // mid-sized one and nearly 2x the 2.8 of a large one, so on the strict
+    // preset ordinary cards were reading as quiet. Banding it keeps the
+    // measured behaviour for small cards and fixes the rest.
+    quietFraction: 0.6,
     quietMinChats: 400,        // below this, one comment either way is noise
+
+    // A card drawing this many times the discussion its cohort gets has
+    // demonstrably earned its traffic, and is never flagged on depth or the
+    // peer score at whatever dial setting. Measured: the highest hand-
+    // labelled BOTTED card reaches 4.3x its cohort rate; a card labelled
+    // plainly genuine sat at 10.8x (89.4 per 1,000 chats against the 8.3 its
+    // size normally gets) and got marked anyway once the dial was turned up.
+    // Five sits in that gap. This does not touch the silence rule, which is
+    // about the opposite end.
+    vouchMultiple: 5,
 
     // --- silence ----------------------------------------------------
     //
@@ -849,9 +890,39 @@ var JBF = (function () {
     // which is exactly what shipped before.
     trustAbove: 10000,
 
-    // Below this the ratio is mostly noise — see the chat floor in
-    // evaluate() for the measurement and what still gets through.
+    // ACTIVITY FLOOR, in total messages. Messages rather than chats because
+    // the question is "has this card done enough to be worth judging", and a
+    // card with 150 chats and 5,290 messages plainly has. Under minMessages
+    // nothing is judged; between the two a card can only be MARKED.
+    //
+    // 4,000 rather than 5,000: of four confirmed bots the smallest sit at
+    // 4,460 and 4,932 messages, and a 5,000 floor would un-hide both.
+    minMessages: 3000,
+    hideMessages: 4000,
+
+    // Still used to fit the baseline and to report flag rates, but no longer
+    // the judging floor.
     minChats: 200,
+
+    // THE DEPTH SCORE NO LONGER HIDES A CARD BY ITSELF. It has to be joined
+    // by the token-free peer score: this many times the msg/chat that cards
+    // of the same size and age actually run at. Below it, the card is marked
+    // and left to you however extreme its depth.
+    //
+    // 2.5 is where the hand-labelled cards sit either side. Confirmed botted:
+    // 55.4x, 9.3x, 3.1x. Judged "probably not" or "not sure": 2.5x, 2.3x,
+    // 1.3x — including one hidden purely on a 724-token definition that its
+    // own labeller had stopped believing in.
+    //
+    // Set to 0 to let depth decide alone, which is what shipped before.
+    peerSupport: 2.5,
+    // And the same signal in the other direction: this far above its cohort
+    // corroborates a hide, exactly as a dead comment section does. On one
+    // labelled page the three confirmed bots ran at 3.77x, 4.92x and 9.12x
+    // while the highest genuine card reached 3.39x. Four sits between them
+    // with room on both sides, and catches a confirmed bot that depth alone
+    // left at 11.6 — just under the tier that decides by itself.
+    peerOdd: 4.0,
     minSamples: 150,           // no verdicts until the curve means something
 
     // Page 1 is where inflated cards concentrate, so learning "normal" from
@@ -867,7 +938,7 @@ var JBF = (function () {
     showPanel: true,
     // Bumped when a release changes what the filter does by default, so an
     // install doesn't stay pinned to a calibration from months ago.
-    cfgVersion: 7,
+    cfgVersion: 10,
 
     whitelist: [],
     suspected: [],           // cards you have marked as botted yourself
@@ -878,14 +949,14 @@ var JBF = (function () {
   // moving the slider keeps the two tiers in proportion rather than
   // collapsing them together at one end of the range.
   const PRESETS = {
-    cautious: { rule: 'thin', thinScore: 14, depthSure: 20, thinRatio: 12, silenceRatio: 2.2, maxMultiple: 3.5, lowMultiple: 5.0, peerLowSide: true, minChats: 400, trustAbove: 6000 },
-    balanced: { rule: 'thin', thinScore: 11, depthSure: 15, thinRatio: 10, silenceRatio: 3.0, maxMultiple: 2.25, lowMultiple: 4.0, peerLowSide: true, minChats: 200, trustAbove: 10000 },
+    cautious: { rule: 'thin', thinScore: 14, depthSure: 20, thinRatio: 12, peerSupport: 3.5, quietFraction: 0.45, silenceRatio: 2.2, maxMultiple: 3.5, lowMultiple: 5.0, peerLowSide: true, minChats: 400, trustAbove: 6000 },
+    balanced: { rule: 'thin', thinScore: 11, depthSure: 15, thinRatio: 10, peerSupport: 2.5, quietFraction: 0.6, silenceRatio: 3.0, maxMultiple: 2.25, lowMultiple: 4.0, peerLowSide: true, minChats: 200, trustAbove: 10000 },
     // strict's trustAbove was 25,000, which left 1.07x of daylight over the
     // smallest live card the depth rule misreads (26,652 chats). One card's
     // growth and the preset reintroduces the bug the guard exists to stop.
     // Its silenceRatio was 4.0 against a lowest-measured genuine card of
     // 4.66 — 1.16x, which is not a margin either.
-    strict:   { rule: 'thin', thinScore: 8, depthSure: 11, thinRatio: 8, silenceRatio: 3.5, maxMultiple: 1.9, lowMultiple: 3.0, peerLowSide: true, minChats: 100, trustAbove: 20000 }
+    strict:   { rule: 'thin', thinScore: 7, depthSure: 10, thinRatio: 8, peerSupport: 1.2, quietFraction: 0.85, silenceRatio: 3.5, maxMultiple: 1.9, lowMultiple: 3.0, peerLowSide: true, minChats: 100, trustAbove: 20000 }
   };
 
   let cfg = Object.assign({}, DEFAULTS);
@@ -1022,12 +1093,26 @@ var JBF = (function () {
     return r;
   }
 
+  // A LISTING request, as opposed to whatever else the page fetched from the
+  // same endpoint. Signed in, the home page also fills carousels — recently
+  // viewed, your own chats — from /hampter/characters, and those cards were
+  // going straight into the baseline. They are the worst possible sample of
+  // "normal": self-selected, skewed old, and chosen by the one person whose
+  // taste the filter must not learn. A listing carries a page number; a
+  // carousel fetches a fixed set by id.
+  function isListing(u) {
+    try {
+      const q = new URL(u, location.origin).searchParams;
+      return q.has('page') && !q.has('ids') && !q.has('id');
+    } catch (e) { return false; }
+  }
+
   function apiUrls() {
     let out = [];
     try {
       out = performance.getEntriesByType('resource')
         .map(e => e.name)
-        .filter(u => API_RE.test(u) && sameOrigin(u) && !ownRequests.has(u));
+        .filter(u => API_RE.test(u) && sameOrigin(u) && !ownRequests.has(u) && isListing(u));
     } catch (e) { /* no perf timeline */ }
     return out;
   }
@@ -1266,6 +1351,14 @@ var JBF = (function () {
   // 1,815 tokens, 2.3x past anything measured in its class.
   const SUBFLOOR_MIN_TOKENS = 1000;
 
+  // What a comment section of this size normally looks like: median comments
+  // per 1,000 chats, measured across 74 live cards past the activity floor.
+  // The rate falls hard with size, which is why it is a table and not a
+  // number — see the silence rule in the config.
+  function expectedComments(chats) {
+    return chats < 2000 ? 8.3 : chats < 7000 ? 5.5 : chats < 30000 ? 3.2 : 2.8;
+  }
+
   // Spacing between the two depth tiers. Repairs a config that arrives with
   // them out of order; see normaliseTiers.
   const TIER_GAP = 1.36;
@@ -1298,26 +1391,6 @@ var JBF = (function () {
   let fitReady = false;
   let baselineDirty = true;
   let lastRebuild = 0;
-
-  function medianOf(sorted) {
-    return sorted.length ? sorted[sorted.length >> 1] : 0;
-  }
-
-  // Median of values weighted by how close each neighbour is.
-  function weightedMedian(pairs) {          // [weight, value]
-    const s = pairs.slice().sort((p, q) => p[1] - q[1]);
-    let total = 0;
-    for (const p of s) total += p[0];
-    let acc = 0;
-    for (const p of s) { acc += p[0]; if (acc >= total / 2) return p[1]; }
-    return s.length ? s[s.length - 1][1] : 0;
-  }
-
-  function quantile(sorted, q) {
-    if (!sorted.length) return 0;
-    const i = (sorted.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i);
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
-  }
 
   // Expectation along one age band, at one size: a robust LOCAL LINE.
   //
@@ -1473,6 +1546,9 @@ var JBF = (function () {
     return { expected, multiple, spread, deviations };
   }
 
+  // Indirection so tests can pin the peer score to a known multiple.
+  let scoreForRef = scoreFor;
+
   // Share of everything seen that the current setting flags — counted, not assumed.
   function flagRate() {
     ensureFit();
@@ -1602,6 +1678,12 @@ var JBF = (function () {
     rec.reason = '';
     rec.multiple = null;
     rec.expected = null;
+    // These are set to true further down and never to false, so without this
+    // they stick: change the dial and a card keeps a guard it no longer
+    // trips, which made the export's `gates` column describe a config the
+    // user had already moved off.
+    rec.trusted = rec.runsNormal = rec.runsOdd = rec.earnsIt = false;
+    rec.quiet = rec.silent = rec.healthyComments = rec.vouched = false;
     if (!cfg.enabled) return rec;
 
     // Talk per 1,000 tokens of character, at this card's age. No baseline,
@@ -1618,7 +1700,7 @@ var JBF = (function () {
         Math.pow(Math.max(1, rec.days || 1), THIN_AGE_POWER)
       : null;
 
-    const sc = scoreFor(rec.chats, rec.ratio, rec.days);
+    const sc = scoreForRef(rec.chats, rec.ratio, rec.days);
     rec.multiple = sc ? sc.multiple : null;
     rec.expected = sc ? sc.expected : null;
     rec.deviations = sc ? sc.deviations : null;
@@ -1641,7 +1723,23 @@ var JBF = (function () {
       rec.comPer1k < cfg.silenceRatio);
     rec.quiet = (cfg.useLikes && rec.commentMode === 'open' &&
       rec.comPer1k != null && rec.chats >= cfg.quietMinChats &&
-      rec.comPer1k < cfg.quietRatio);
+      rec.comPer1k < expectedComments(rec.chats) * cfg.quietFraction);
+    // The mirror of the silence rule, and the only thing that cleared up the
+    // borderline band. Every card called "probably not botted" by hand had a
+    // comment section at or above what cards its size actually get; every
+    // confirmed bot was below it, or had comments switched off. It clears a
+    // near-miss MARK only — a busy comment section has never been allowed to
+    // rescue a card from being hidden, because one confirmed bot ran 36.1
+    // comments per 1,000 chats.
+    rec.healthyComments = (cfg.useLikes && rec.commentMode === 'open' &&
+      rec.comPer1k != null && rec.comPer1k >= expectedComments(rec.chats));
+    // Far past healthy: enough discussion that the traffic is accounted for.
+    // Unlike healthyComments, which only clears a near miss, this clears the
+    // depth and peer rules outright \u2014 they are both arguments that the
+    // conversation cannot be real, and this is the conversation.
+    rec.vouched = (cfg.useLikes && cfg.vouchMultiple > 0 &&
+      rec.commentMode === 'open' && rec.comPer1k != null &&
+      rec.comPer1k >= expectedComments(rec.chats) * cfg.vouchMultiple);
     rec.suspected = (cfg.suspected || []).includes(rec.id);
     // NOT creatorShape() here: it walks every cached card, and evaluate()
     // runs once per candidate while vetting replacements, so calling it made
@@ -1719,39 +1817,42 @@ var JBF = (function () {
       return rec;
     }
 
-    // Under the floor a small card's ratio is mostly noise: across 139 live
-    // cards below 400 chats, median depth runs 18.5 at 1-50, 6.2 at 50-100,
+    // Under the floor the numbers are mostly noise: across 139 live cards
+    // below 400 chats, median depth runs 18.5 at 1-50 chats, 6.2 at 50-100,
     // 5.4 at 100-200, 2.9 at 200-400. One long conversation is the signal.
     //
-    // A card here is hidden ONLY when the score cannot be a tiny-denominator
-    // artefact (see SUBFLOOR_MIN_TOKENS). Otherwise it is marked and left to
-    // you: four ordinary cards in that band score 29.9-76.5 off 127-606
-    // tokens, and nothing separates them from a labelled bot at 42.
-    if (rec.chats < cfg.minChats) {
-      const enoughChats = rec.chats >= MARK_FLOOR;
-      const blatant = rec.over != null && rec.over >= cfg.confidentMultiple &&
-        rec.ratio > cfg.thinRatio && enoughChats;
-      // Both are needed: the bar alone lets the tiny-token artefacts
-      // through, and the token count alone catches nothing.
+    // Between minMessages and hideMessages a card can be MARKED but never
+    // hidden. Above hideMessages it is judged normally even if its chat
+    // count is small — a card with 150 chats and 5,290 messages has done
+    // enough to answer for it.
+    //
+    // The one exception below hideMessages is a card whose score cannot be
+    // a tiny-denominator artefact (see SUBFLOOR_MIN_TOKENS): four ordinary
+    // cards in that band score 29.9-76.5 off 127-606 tokens, and nothing
+    // separates them from a labelled bot at 42.
+    if (rec.messages < cfg.minMessages) {
+      rec.reason = 'too little activity to judge';
+      return rec;
+    }
+    if (rec.messages < cfg.hideMessages) {
       const substantial = rec.tokens >= SUBFLOOR_MIN_TOKENS;
       const farOut = rec.thin !== null &&
         rec.thin > Math.max(cfg.depthSure, cfg.thinScore);
-      if (enoughChats && substantial && farOut && rec.ratio > cfg.thinRatio) {
+      if (substantial && farOut && rec.ratio > cfg.thinRatio) {
         rec.flagged = true;
         rec.confident = true;
         rec.reason = `${rec.ratio.toFixed(1)} msg/chat from a ` +
           `${rec.tokens.toLocaleString('en-US')}-token card \u2014 not enough ` +
-          `character there to talk that long, and only ${rec.chats} chats to ` +
-          'have done it in';
-      } else if (blatant) {
+          'character there to talk that long';
+      } else if (rec.over != null && rec.over >= cfg.confidentMultiple &&
+                 rec.ratio > cfg.thinRatio) {
         rec.flagged = true;
         rec.confident = false;
         rec.reason = `${rec.thin.toFixed(1)} msg/chat per 1k tokens \u2014 far out ` +
-          `of line, but ${rec.chats} chats of a ` +
-          `${rec.tokens.toLocaleString('en-US')}-token card is too little to be ` +
-          'sure. Shift-click to hide it.';
+          `of line, but ${fmt(rec.messages)} messages is too little to be sure. ` +
+          'Shift-click to hide it.';
       } else {
-        rec.reason = 'below sample floor';
+        rec.reason = 'below the activity floor';
       }
       return rec;
     }
@@ -1765,6 +1866,20 @@ var JBF = (function () {
     // for any hand-labelled bot.
     const broadAudience = cfg.trustAbove > 0 && rec.chats >= cfg.trustAbove;
     if (broadAudience) rec.trusted = true;
+
+    // The token-free second opinion. `sc.multiple` is this card's msg/chat
+    // against what cards of ITS OWN size and age actually run at — learned
+    // from browsing, no token count anywhere in it. When that says the card
+    // is normal, depth does not get to hide it on its own: the depth rule's
+    // claim is "nobody could talk this long to this little character", and a
+    // whole cohort talking exactly this long refutes it.
+    //
+    // Null until the baseline has enough samples, in which case depth
+    // decides alone exactly as before.
+    const runsNormal = cfg.peerSupport > 0 && sc && sc.multiple < cfg.peerSupport;
+    if (runsNormal) rec.runsNormal = true;
+    const runsOdd = cfg.peerOdd > 0 && sc && sc.multiple > cfg.peerOdd;
+    if (runsOdd) rec.runsOdd = true;
 
     // Thousands of chats and nobody ever said anything — the family of bots
     // nothing else here can see. Scoped to the measured band; see
@@ -1782,6 +1897,15 @@ var JBF = (function () {
         (rec.comCount === 1 ? ' comment' : ' comments')} on ` +
         `${rec.chats.toLocaleString('en-US')} chats — ` +
         `${rec.comPer1k.toFixed(1)} per 1,000 where cards this size get about 9`;
+      return rec;
+    }
+
+    if (rec.vouched && cfg.rule === 'thin' && rec.thin !== null &&
+        rec.thin > cfg.thinScore * cfg.borderlineFrom) {
+      rec.reason = `${rec.thin.toFixed(1)} msg/chat per 1k tokens is thin, but ` +
+        `${rec.comPer1k.toFixed(0)} comments per 1,000 chats is ` +
+        `${(rec.comPer1k / expectedComments(rec.chats)).toFixed(0)}x what cards ` +
+        'its size get \u2014 the conversation is accounted for';
       return rec;
     }
 
@@ -1803,7 +1927,7 @@ var JBF = (function () {
       // inverted config: depthSure below thinScore would make every marked
       // card clear the upper tier at once, collapsing the middle one.
       const sureAt = Math.max(cfg.depthSure, cfg.thinScore);
-      if (rec.thin > sureAt && !broadAudience) {
+      if (rec.thin > sureAt && !broadAudience && !runsNormal) {
         rec.confident = true;
         rec.reason = thinNote;
         return rec;
@@ -1812,13 +1936,25 @@ var JBF = (function () {
       // healthy count — that was tried and measured wrong, two hand-labelled
       // bots carrying 15.1 and 24.6 per 1,000 against 14.5 on a genuine one.
       // The comment rate corroborates downward, never upward.
-      if (rec.quiet && !broadAudience) {
+      if (rec.quiet && !broadAudience && !runsNormal) {
         rec.confident = true;
         rec.reason = thinNote + `, and only ${rec.comPer1k.toFixed(1)} ` +
           'comments per 1,000 chats to show for it';
         return rec;
       }
+      if (runsOdd && !broadAudience) {
+        rec.confident = true;
+        rec.reason = thinNote + `, and ${sc.multiple.toFixed(1)}x the rate ` +
+          'cards of its size and age actually run at';
+        return rec;
+      }
       rec.confident = false;
+      if (runsNormal) {
+        rec.reason = thinNote + `, but at ${sc.multiple.toFixed(1)}x the rate ` +
+          'cards its size and age run at, it is not out of the ordinary for ' +
+          'them. Shift-click to hide it.';
+        return rec;
+      }
       rec.reason = broadAudience
         ? thinNote + `, but ${fmt(rec.chats)} separate chats \u2014 too broad ` +
           'an audience to be cheap to fake. Shift-click to hide it.'
@@ -1835,10 +1971,20 @@ var JBF = (function () {
       const near = `${rec.ratio.toFixed(1)} msg/chat from a ` +
         `${rec.tokens.toLocaleString('en-US')}-token card \u2014 close to the line ` +
         `(${(rec.over * 100).toFixed(0)}% of it)`;
-      if (rec.quiet && !broadAudience) {
+      if (rec.quiet && !broadAudience && !runsNormal) {
         rec.confident = true;
         rec.reason = near + `, and only ${rec.comPer1k.toFixed(1)} comments ` +
           'per 1,000 chats to back it up';
+        return rec;
+      }
+      // Depth alone in this band was producing noise: three cards judged
+      // "probably not botted" by hand all landed here, all with healthy
+      // comment sections. A near miss is only worth showing you when
+      // something else leans the same way.
+      if (rec.healthyComments) {
+        rec.flagged = false;
+        rec.reason = near + `, but ${rec.comPer1k.toFixed(1)} comments per 1,000 ` +
+          'chats is a normal amount for its size';
         return rec;
       }
       rec.confident = false;
@@ -2595,7 +2741,7 @@ var JBF = (function () {
     const head = ['name', 'creator', 'chats', 'messages', 'msg_per_chat',
       'normal_for_size_and_age', 'times_normal', 'chats_per_day', 'days_old',
       'public_chats', 'card_tokens', 'msg_per_chat_per_1k_tokens',
-      'comments', 'comments_per_1k_chats', 'comment_mode', 'your_label',
+      'comments', 'comments_per_1k_chats', 'comment_mode', 'gates', 'your_label',
       // growth shape — blank until the card has been seen a few times
       'sightings', 'hours_watched', 'flatness', 'fresh_msg_per_chat', 'ratio_drift',
       // creator's other cards, compared only with each other
@@ -2620,6 +2766,14 @@ var JBF = (function () {
       r.comCount == null ? '' : r.comCount,
       r.comPer1k == null ? '' : r.comPer1k.toFixed(1),
       r.commentMode || '',
+      // Which guards actually fired on this card. Every one of these was
+      // being computed and thrown away, which made a verdict impossible to
+      // argue with from the export alone.
+      [r.trusted && 'broad-audience', r.runsNormal && 'peer-says-normal',
+       r.runsOdd && 'peer-says-odd', r.vouched && 'comments-vouch',
+       r.healthyComments && 'comments-healthy', r.quiet && 'comments-quiet',
+       r.silent && 'comments-silent', r.earnsIt && 'earns-its-ratio']
+        .filter(Boolean).join(' '),
       r.suspected ? 'botted' : ((cfg.whitelist || []).includes(r.id) ? 'fine' : ''),
       r.shape ? r.shape.spans + 1 : '',
       r.shape ? Math.round(r.shape.hours) : '',
@@ -2671,13 +2825,22 @@ var JBF = (function () {
         // worth keeping. trustAbove especially: it shipped as 0, which is
         // the setting that let large minimal cards be hidden on ratio alone.
         cfg.depthSure = DEFAULTS.depthSure;
-        cfg.quietRatio = DEFAULTS.quietRatio;
         cfg.quietMinChats = DEFAULTS.quietMinChats;
         cfg.flagSilence = DEFAULTS.flagSilence;
         cfg.silenceRatio = DEFAULTS.silenceRatio;
         cfg.silenceMinChats = DEFAULTS.silenceMinChats;
         cfg.silenceMaxChats = DEFAULTS.silenceMaxChats;
         if (!(cfg.trustAbove > 0)) cfg.trustAbove = DEFAULTS.trustAbove;
+        // v8: the activity floor moved from chats to messages, and the peer
+        // score became a two-way guard on the depth rule.
+        cfg.minMessages = DEFAULTS.minMessages;
+        cfg.hideMessages = DEFAULTS.hideMessages;
+        cfg.peerOdd = DEFAULTS.peerOdd;
+        delete cfg.peerNormal;          // v8 name; became peerSupport in v9
+        cfg.peerSupport = DEFAULTS.peerSupport;
+        cfg.vouchMultiple = DEFAULTS.vouchMultiple;
+        delete cfg.quietRatio;          // flat; banded as quietFraction in v10
+        cfg.quietFraction = DEFAULTS.quietFraction;
         cfg.cfgVersion = DEFAULTS.cfgVersion;
         if (storage) { try { storage.set(cfg); } catch (e) { /* best effort */ } }
       }
@@ -2882,9 +3045,13 @@ var JBF = (function () {
     get cfg() { return cfg; },
     DEFAULTS, PRESETS,
     _internals: { api, samples, records, trends, evaluate, findCards,
+      // Swappable so the peer guard can be tested against a known multiple
+      // rather than a whole synthetic population.
+      setScoreFor: fn => { scoreForRef = fn || scoreFor; },
                   ingest, noteSample, scoreFor, rebuildBaseline, flagRate,
       history, growthShape, creatorShape, noteHistory, evaluate, comments, publicGet,
-      creatorWalks: () => creatorWalks, wouldFlag, fillGaps, askAboutFlagged }
+      creatorWalks: () => creatorWalks, wouldFlag, fillGaps, askAboutFlagged,
+      apiUrls, isListing }
   };
 })();
 

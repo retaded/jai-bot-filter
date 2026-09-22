@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 # takes for installs to pick it up.
 GH_USER="retaded"
 GH_REPO="jai-bot-filter"
-VERSION="7.1.1"
+VERSION="7.6.0"
 # ---------------------------------------------------------------------
 
 OUT="dist/jai-bot-filter.user.js"
